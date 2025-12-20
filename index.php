@@ -9,7 +9,7 @@
   <body>
     <header>
       <h1>Welcome to My CMS</h1>
-      <p>Publish,vv manage, and grow your content in one place.</p>
+      <p>Publish,vv manage, ankkkkjd grow your content in one place.</p>
     </header>
     <main>
       <section>
