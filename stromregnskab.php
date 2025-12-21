@@ -292,16 +292,31 @@ function sr_render_residents_page() {
 		$name         = sanitize_text_field( wp_unslash( $_POST['name'] ?? '' ) );
 		$member_num   = sanitize_text_field( wp_unslash( $_POST['member_number'] ?? '' ) );
 		$wp_user_id   = absint( $_POST['wp_user_id'] ?? 0 );
+		$resident_id  = absint( $_POST['resident_id'] ?? 0 );
 
-		if ( $name && $member_num ) {
+		if ( $name && $member_num && $resident_id ) {
+			$wpdb->update(
+				$table_residents,
+				array(
+					'name'          => $name,
+					'member_number' => $member_num,
+					'wp_user_id'    => $wp_user_id ? $wp_user_id : null,
+					'updated_at'    => sr_now(),
+				),
+				array( 'id' => $resident_id ),
+				array( '%s', '%s', '%d', '%s' ),
+				array( '%d' )
+			);
+			sr_log_action( 'update', 'resident', $resident_id, 'Beboer opdateret' );
+		} elseif ( $name && $member_num ) {
 			$wpdb->insert(
 				$table_residents,
 				array(
-					'name'         => $name,
-					'member_number'=> $member_num,
-					'wp_user_id'   => $wp_user_id ? $wp_user_id : null,
-					'created_at'   => sr_now(),
-					'updated_at'   => sr_now(),
+					'name'          => $name,
+					'member_number' => $member_num,
+					'wp_user_id'    => $wp_user_id ? $wp_user_id : null,
+					'created_at'    => sr_now(),
+					'updated_at'    => sr_now(),
 				),
 				array( '%s', '%s', '%d', '%s', '%s' )
 			);
@@ -314,8 +329,9 @@ function sr_render_residents_page() {
 	?>
 	<div class="wrap">
 		<h1>Beboere</h1>
-		<form method="post">
+		<form method="post" id="sr-resident-form">
 			<?php wp_nonce_field( 'sr_add_resident_action', 'sr_add_resident_nonce' ); ?>
+			<input type="hidden" name="resident_id" id="sr_resident_id" value="">
 			<table class="form-table">
 				<tr>
 					<th scope="row"><label for="name">Navn</label></th>
@@ -339,7 +355,8 @@ function sr_render_residents_page() {
 					</td>
 				</tr>
 			</table>
-			<?php submit_button( 'Opret beboer', 'primary', 'sr_add_resident' ); ?>
+			<?php submit_button( 'Opret beboer', 'primary', 'sr_add_resident', false, array( 'id' => 'sr_resident_submit' ) ); ?>
+			<button type="button" class="button" id="sr_resident_cancel" style="display:none;">Afbryd</button>
 		</form>
 
 		<h2>Eksisterende beboere</h2>
@@ -349,6 +366,7 @@ function sr_render_residents_page() {
 					<th>Navn</th>
 					<th>Medlemsnummer</th>
 					<th>WP-bruger</th>
+					<th>Handling</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -357,11 +375,62 @@ function sr_render_residents_page() {
 					<td><?php echo esc_html( $resident->name ); ?></td>
 					<td><?php echo esc_html( $resident->member_number ); ?></td>
 					<td><?php echo esc_html( $resident->wp_user_id ); ?></td>
+					<td>
+						<button
+							type="button"
+							class="button sr-fill-resident"
+							data-resident-id="<?php echo esc_attr( $resident->id ); ?>"
+							data-name="<?php echo esc_attr( $resident->name ); ?>"
+							data-member-number="<?php echo esc_attr( $resident->member_number ); ?>"
+							data-wp-user-id="<?php echo esc_attr( $resident->wp_user_id ); ?>"
+						>Indsæt</button>
+					</td>
 				</tr>
 			<?php endforeach; ?>
 			</tbody>
 		</table>
 	</div>
+	<script>
+		(function () {
+			const form = document.getElementById('sr-resident-form');
+			if (!form) {
+				return;
+			}
+			const submitButton = document.getElementById('sr_resident_submit');
+			const cancelButton = document.getElementById('sr_resident_cancel');
+			const residentId = document.getElementById('sr_resident_id');
+			const nameField = document.getElementById('name');
+			const memberField = document.getElementById('member_number');
+			const userField = document.getElementById('wp_user_id');
+			const defaultLabel = submitButton ? submitButton.value : '';
+
+			document.querySelectorAll('.sr-fill-resident').forEach((button) => {
+				button.addEventListener('click', () => {
+					nameField.value = button.dataset.name || '';
+					memberField.value = button.dataset.memberNumber || '';
+					userField.value = button.dataset.wpUserId || '';
+					residentId.value = button.dataset.residentId || '';
+					if (submitButton) {
+						submitButton.value = 'Gem';
+					}
+					if (cancelButton) {
+						cancelButton.style.display = 'inline-block';
+					}
+				});
+			});
+
+			if (cancelButton) {
+				cancelButton.addEventListener('click', () => {
+					form.reset();
+					residentId.value = '';
+					if (submitButton) {
+						submitButton.value = defaultLabel;
+					}
+					cancelButton.style.display = 'none';
+				});
+			}
+		}());
+	</script>
 	<?php
 }
 
@@ -384,8 +453,29 @@ function sr_render_readings_page() {
 		$month       = absint( $_POST['period_month'] ?? 0 );
 		$year        = absint( $_POST['period_year'] ?? 0 );
 		$reading     = (float) ( $_POST['reading_kwh'] ?? 0 );
+		$reading_id  = absint( $_POST['reading_id'] ?? 0 );
 
-		if ( $resident_id && $month && $year && ! sr_is_period_locked( $month, $year ) ) {
+		if ( $resident_id && $month && $year && $reading_id && ! sr_is_period_locked( $month, $year ) ) {
+			$existing = $wpdb->get_row( $wpdb->prepare( "SELECT status FROM {$table_readings} WHERE id = %d", $reading_id ) );
+			if ( $existing ) {
+				$wpdb->update(
+					$table_readings,
+					array(
+						'resident_id' => $resident_id,
+						'period_month'=> $month,
+						'period_year' => $year,
+						'reading_kwh' => $reading,
+					),
+					array( 'id' => $reading_id ),
+					array( '%d', '%d', '%d', '%f' ),
+					array( '%d' )
+				);
+				sr_log_action( 'update', 'reading', $reading_id, 'Admin opdatering' );
+				if ( 'verified' === $existing->status ) {
+					sr_generate_summary_for_reading( $resident_id, $month, $year );
+				}
+			}
+		} elseif ( $resident_id && $month && $year && ! sr_is_period_locked( $month, $year ) ) {
 			$wpdb->insert(
 				$table_readings,
 				array(
@@ -433,13 +523,14 @@ function sr_render_readings_page() {
 	?>
 	<div class="wrap">
 		<h1>Målerstande</h1>
-		<form method="post">
+		<form method="post" id="sr-reading-form" data-current-month="<?php echo esc_attr( $current_month ); ?>" data-current-year="<?php echo esc_attr( $current_year ); ?>">
 			<?php wp_nonce_field( 'sr_add_reading_action', 'sr_add_reading_nonce' ); ?>
+			<input type="hidden" name="reading_id" id="sr_reading_id" value="">
 			<table class="form-table">
 				<tr>
 					<th scope="row">Beboer</th>
 					<td>
-						<select name="resident_id" required>
+						<select name="resident_id" id="sr_reading_resident" required>
 							<option value="">Vælg beboer</option>
 							<?php foreach ( $residents as $resident ) : ?>
 								<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->name ); ?></option>
@@ -450,16 +541,17 @@ function sr_render_readings_page() {
 				<tr>
 					<th scope="row">Periode (måned/år)</th>
 					<td>
-						<input type="number" name="period_month" min="1" max="12" required value="<?php echo esc_attr( $current_month ); ?>">
-						<input type="number" name="period_year" min="2000" max="2100" required value="<?php echo esc_attr( $current_year ); ?>">
+						<input type="number" name="period_month" id="sr_reading_month" min="1" max="12" required value="<?php echo esc_attr( $current_month ); ?>">
+						<input type="number" name="period_year" id="sr_reading_year" min="2000" max="2100" required value="<?php echo esc_attr( $current_year ); ?>">
 					</td>
 				</tr>
 				<tr>
 					<th scope="row">Målerstand (kWh)</th>
-					<td><input type="number" name="reading_kwh" step="0.001" required></td>
+					<td><input type="number" name="reading_kwh" id="sr_reading_value" step="0.001" required></td>
 				</tr>
 			</table>
-			<?php submit_button( 'Indtast og verificer', 'primary', 'sr_add_reading' ); ?>
+			<?php submit_button( 'Indtast og verificer', 'primary', 'sr_add_reading', false, array( 'id' => 'sr_reading_submit' ) ); ?>
+			<button type="button" class="button" id="sr_reading_cancel" style="display:none;">Afbryd</button>
 		</form>
 
 		<h2>Indberetninger</h2>
@@ -486,6 +578,15 @@ function sr_render_readings_page() {
 						<td><?php echo esc_html( $reading->reading_kwh ); ?></td>
 						<td><?php echo esc_html( $reading->status ); ?></td>
 						<td>
+							<button
+								type="button"
+								class="button sr-fill-reading"
+								data-reading-id="<?php echo esc_attr( $reading->id ); ?>"
+								data-resident-id="<?php echo esc_attr( $reading->resident_id ); ?>"
+								data-period-month="<?php echo esc_attr( $reading->period_month ); ?>"
+								data-period-year="<?php echo esc_attr( $reading->period_year ); ?>"
+								data-reading-kwh="<?php echo esc_attr( $reading->reading_kwh ); ?>"
+							>Indsæt</button>
 							<?php if ( 'pending' === $reading->status ) : ?>
 								<a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-readings&verify_reading=' . $reading->id ), 'sr_verify_reading_' . $reading->id ) ); ?>">Verificer</a>
 							<?php else : ?>
@@ -497,6 +598,54 @@ function sr_render_readings_page() {
 			</tbody>
 		</table>
 	</div>
+	<script>
+		(function () {
+			const form = document.getElementById('sr-reading-form');
+			if (!form) {
+				return;
+			}
+			const submitButton = document.getElementById('sr_reading_submit');
+			const cancelButton = document.getElementById('sr_reading_cancel');
+			const readingId = document.getElementById('sr_reading_id');
+			const residentField = document.getElementById('sr_reading_resident');
+			const monthField = document.getElementById('sr_reading_month');
+			const yearField = document.getElementById('sr_reading_year');
+			const readingField = document.getElementById('sr_reading_value');
+			const defaultLabel = submitButton ? submitButton.value : '';
+			const currentMonth = form.dataset.currentMonth || '';
+			const currentYear = form.dataset.currentYear || '';
+
+			document.querySelectorAll('.sr-fill-reading').forEach((button) => {
+				button.addEventListener('click', () => {
+					residentField.value = button.dataset.residentId || '';
+					monthField.value = button.dataset.periodMonth || currentMonth;
+					yearField.value = button.dataset.periodYear || currentYear;
+					readingField.value = button.dataset.readingKwh || '';
+					readingId.value = button.dataset.readingId || '';
+					if (submitButton) {
+						submitButton.value = 'Gem';
+					}
+					if (cancelButton) {
+						cancelButton.style.display = 'inline-block';
+					}
+				});
+			});
+
+			if (cancelButton) {
+				cancelButton.addEventListener('click', () => {
+					form.reset();
+					readingId.value = '';
+					residentField.value = '';
+					monthField.value = currentMonth;
+					yearField.value = currentYear;
+					if (submitButton) {
+						submitButton.value = defaultLabel;
+					}
+					cancelButton.style.display = 'none';
+				});
+			}
+		}());
+	</script>
 	<?php
 }
 
@@ -519,8 +668,26 @@ function sr_render_payments_page() {
 		$month       = absint( $_POST['period_month'] ?? 0 );
 		$year        = absint( $_POST['period_year'] ?? 0 );
 		$amount      = (float) ( $_POST['amount'] ?? 0 );
+		$payment_id  = absint( $_POST['payment_id'] ?? 0 );
 
-		if ( $resident_id && $month && $year && ! sr_is_period_locked( $month, $year ) ) {
+		if ( $resident_id && $month && $year && $payment_id && ! sr_is_period_locked( $month, $year ) ) {
+			$existing = $wpdb->get_row( $wpdb->prepare( "SELECT id FROM {$table_payments} WHERE id = %d", $payment_id ) );
+			if ( $existing ) {
+				$wpdb->update(
+					$table_payments,
+					array(
+						'resident_id' => $resident_id,
+						'period_month'=> $month,
+						'period_year' => $year,
+						'amount'      => $amount,
+					),
+					array( 'id' => $payment_id ),
+					array( '%d', '%d', '%d', '%f' ),
+					array( '%d' )
+				);
+				sr_log_action( 'update', 'payment', $payment_id, 'Admin opdatering' );
+			}
+		} elseif ( $resident_id && $month && $year && ! sr_is_period_locked( $month, $year ) ) {
 			$wpdb->insert(
 				$table_payments,
 				array(
@@ -566,13 +733,14 @@ function sr_render_payments_page() {
 	?>
 	<div class="wrap">
 		<h1>Indbetalinger</h1>
-		<form method="post">
+		<form method="post" id="sr-payment-form" data-current-month="<?php echo esc_attr( $current_month ); ?>" data-current-year="<?php echo esc_attr( $current_year ); ?>">
 			<?php wp_nonce_field( 'sr_add_payment_action', 'sr_add_payment_nonce' ); ?>
+			<input type="hidden" name="payment_id" id="sr_payment_id" value="">
 			<table class="form-table">
 				<tr>
 					<th scope="row">Beboer</th>
 					<td>
-						<select name="resident_id" required>
+						<select name="resident_id" id="sr_payment_resident" required>
 							<option value="">Vælg beboer</option>
 							<?php foreach ( $residents as $resident ) : ?>
 								<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->name ); ?></option>
@@ -583,16 +751,17 @@ function sr_render_payments_page() {
 				<tr>
 					<th scope="row">Periode (måned/år)</th>
 					<td>
-						<input type="number" name="period_month" min="1" max="12" required value="<?php echo esc_attr( $current_month ); ?>">
-						<input type="number" name="period_year" min="2000" max="2100" required value="<?php echo esc_attr( $current_year ); ?>">
+						<input type="number" name="period_month" id="sr_payment_month" min="1" max="12" required value="<?php echo esc_attr( $current_month ); ?>">
+						<input type="number" name="period_year" id="sr_payment_year" min="2000" max="2100" required value="<?php echo esc_attr( $current_year ); ?>">
 					</td>
 				</tr>
 				<tr>
 					<th scope="row">Beløb</th>
-					<td><input type="number" name="amount" step="0.01" required></td>
+					<td><input type="number" name="amount" id="sr_payment_amount" step="0.01" required></td>
 				</tr>
 			</table>
-			<?php submit_button( 'Indtast og verificer', 'primary', 'sr_add_payment' ); ?>
+			<?php submit_button( 'Indtast og verificer', 'primary', 'sr_add_payment', false, array( 'id' => 'sr_payment_submit' ) ); ?>
+			<button type="button" class="button" id="sr_payment_cancel" style="display:none;">Afbryd</button>
 		</form>
 
 		<h2>Indberetninger</h2>
@@ -619,6 +788,15 @@ function sr_render_payments_page() {
 						<td><?php echo esc_html( $payment->amount ); ?></td>
 						<td><?php echo esc_html( $payment->status ); ?></td>
 						<td>
+							<button
+								type="button"
+								class="button sr-fill-payment"
+								data-payment-id="<?php echo esc_attr( $payment->id ); ?>"
+								data-resident-id="<?php echo esc_attr( $payment->resident_id ); ?>"
+								data-period-month="<?php echo esc_attr( $payment->period_month ); ?>"
+								data-period-year="<?php echo esc_attr( $payment->period_year ); ?>"
+								data-amount="<?php echo esc_attr( $payment->amount ); ?>"
+							>Indsæt</button>
 							<?php if ( 'pending' === $payment->status ) : ?>
 								<a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-payments&verify_payment=' . $payment->id ), 'sr_verify_payment_' . $payment->id ) ); ?>">Verificer</a>
 							<?php else : ?>
@@ -630,6 +808,54 @@ function sr_render_payments_page() {
 			</tbody>
 		</table>
 	</div>
+	<script>
+		(function () {
+			const form = document.getElementById('sr-payment-form');
+			if (!form) {
+				return;
+			}
+			const submitButton = document.getElementById('sr_payment_submit');
+			const cancelButton = document.getElementById('sr_payment_cancel');
+			const paymentId = document.getElementById('sr_payment_id');
+			const residentField = document.getElementById('sr_payment_resident');
+			const monthField = document.getElementById('sr_payment_month');
+			const yearField = document.getElementById('sr_payment_year');
+			const amountField = document.getElementById('sr_payment_amount');
+			const defaultLabel = submitButton ? submitButton.value : '';
+			const currentMonth = form.dataset.currentMonth || '';
+			const currentYear = form.dataset.currentYear || '';
+
+			document.querySelectorAll('.sr-fill-payment').forEach((button) => {
+				button.addEventListener('click', () => {
+					residentField.value = button.dataset.residentId || '';
+					monthField.value = button.dataset.periodMonth || currentMonth;
+					yearField.value = button.dataset.periodYear || currentYear;
+					amountField.value = button.dataset.amount || '';
+					paymentId.value = button.dataset.paymentId || '';
+					if (submitButton) {
+						submitButton.value = 'Gem';
+					}
+					if (cancelButton) {
+						cancelButton.style.display = 'inline-block';
+					}
+				});
+			});
+
+			if (cancelButton) {
+				cancelButton.addEventListener('click', () => {
+					form.reset();
+					paymentId.value = '';
+					residentField.value = '';
+					monthField.value = currentMonth;
+					yearField.value = currentYear;
+					if (submitButton) {
+						submitButton.value = defaultLabel;
+					}
+					cancelButton.style.display = 'none';
+				});
+			}
+		}());
+	</script>
 	<?php
 }
 
