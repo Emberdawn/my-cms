@@ -1658,7 +1658,13 @@ function sr_render_resident_account_page() {
 										<?php echo esc_html( number_format( (float) $row['price'], 4, ',', '.' ) ); ?>
 									<?php endif; ?>
 								</td>
-								<td>
+								<?php
+								$cost_class = '';
+								if ( null !== $row['cost'] ) {
+									$cost_class = $row['cost'] < 0 ? 'sr-negative' : 'sr-positive';
+								}
+								?>
+								<td class="<?php echo esc_attr( $cost_class ); ?>">
 									<?php if ( null === $row['cost'] ) : ?>
 										Ikke beregnet
 									<?php else : ?>
