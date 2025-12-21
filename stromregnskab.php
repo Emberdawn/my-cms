@@ -173,6 +173,47 @@ function sr_now() {
 }
 
 /**
+ * Get pagination page from request.
+ *
+ * @param string $key Query param key.
+ * @return int
+ */
+function sr_get_paged_param( $key ) {
+	$page = isset( $_GET[ $key ] ) ? (int) $_GET[ $key ] : 1;
+	if ( $page < 1 ) {
+		$page = 1;
+	}
+	return $page;
+}
+
+/**
+ * Render pagination links for admin tables.
+ *
+ * @param string $base_url    Base URL for links.
+ * @param int    $page        Current page.
+ * @param int    $total_pages Total pages.
+ */
+function sr_render_pagination( $base_url, $page, $total_pages ) {
+	if ( $total_pages < 2 ) {
+		return;
+	}
+
+	$first_link = add_query_arg( 'sr_page', 1, $base_url );
+	$prev_link  = add_query_arg( 'sr_page', max( 1, $page - 1 ), $base_url );
+	$next_link  = add_query_arg( 'sr_page', min( $total_pages, $page + 1 ), $base_url );
+	$last_link  = add_query_arg( 'sr_page', $total_pages, $base_url );
+
+	echo '<div class="tablenav"><div class="tablenav-pages">';
+	echo '<span class="pagination-links">';
+	echo $page > 1 ? '<a class="first-page button" href="' . esc_url( $first_link ) . '">&laquo;</a>' : '<span class="tablenav-pages-navspan button disabled">&laquo;</span>';
+	echo $page > 1 ? '<a class="prev-page button" href="' . esc_url( $prev_link ) . '">&lsaquo;</a>' : '<span class="tablenav-pages-navspan button disabled">&lsaquo;</span>';
+	echo '<span class="paging-input">' . esc_html( $page ) . ' / <span class="total-pages">' . esc_html( $total_pages ) . '</span></span>';
+	echo $page < $total_pages ? '<a class="next-page button" href="' . esc_url( $next_link ) . '">&rsaquo;</a>' : '<span class="tablenav-pages-navspan button disabled">&rsaquo;</span>';
+	echo $page < $total_pages ? '<a class="last-page button" href="' . esc_url( $last_link ) . '">&raquo;</a>' : '<span class="tablenav-pages-navspan button disabled">&raquo;</span>';
+	echo '</span></div></div>';
+}
+
+/**
  * Normalize decimal input, supporting comma decimals and thousands separators.
  *
  * @param mixed $value Raw input value.
@@ -305,6 +346,11 @@ function sr_render_residents_page() {
 
 	global $wpdb;
 	$table_residents = $wpdb->prefix . 'sr_residents';
+	$per_page        = 20;
+	$current_page    = sr_get_paged_param( 'sr_page' );
+	$total_items     = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_residents}" );
+	$total_pages     = (int) max( 1, ceil( $total_items / $per_page ) );
+	$offset          = ( $current_page - 1 ) * $per_page;
 
 	if ( isset( $_POST['sr_add_resident'] ) ) {
 		check_admin_referer( 'sr_add_resident_action', 'sr_add_resident_nonce' );
@@ -343,7 +389,7 @@ function sr_render_residents_page() {
 		}
 	}
 
-	$residents = $wpdb->get_results( "SELECT * FROM {$table_residents} ORDER BY name ASC" );
+	$residents = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table_residents} ORDER BY name ASC LIMIT %d OFFSET %d", $per_page, $offset ) );
 	$users     = get_users();
 	?>
 	<div class="wrap">
@@ -408,6 +454,7 @@ function sr_render_residents_page() {
 			<?php endforeach; ?>
 			</tbody>
 		</table>
+		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-residents' ), $current_page, $total_pages ); ?>
 	</div>
 	<script>
 		(function () {
@@ -463,6 +510,11 @@ function sr_render_readings_page() {
 	global $wpdb;
 	$table_readings = $wpdb->prefix . 'sr_meter_readings';
 	$table_residents = $wpdb->prefix . 'sr_residents';
+	$per_page        = 20;
+	$current_page    = sr_get_paged_param( 'sr_page' );
+	$total_items     = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_readings}" );
+	$total_pages     = (int) max( 1, ceil( $total_items / $per_page ) );
+	$offset          = ( $current_page - 1 ) * $per_page;
 	$current_month   = (int) current_time( 'n' );
 	$current_year    = (int) current_time( 'Y' );
 
@@ -556,7 +608,7 @@ function sr_render_readings_page() {
 	}
 
 	$residents = $wpdb->get_results( "SELECT * FROM {$table_residents} ORDER BY name ASC" );
-	$readings  = $wpdb->get_results( "SELECT * FROM {$table_readings} ORDER BY submitted_at DESC" );
+	$readings  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table_readings} ORDER BY submitted_at DESC LIMIT %d OFFSET %d", $per_page, $offset ) );
 	?>
 	<div class="wrap">
 		<h1>Målerstande</h1>
@@ -639,6 +691,7 @@ function sr_render_readings_page() {
 				<?php endforeach; ?>
 			</tbody>
 		</table>
+		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-readings' ), $current_page, $total_pages ); ?>
 	</div>
 	<script>
 		(function () {
@@ -708,6 +761,11 @@ function sr_render_payments_page() {
 	global $wpdb;
 	$table_payments  = $wpdb->prefix . 'sr_payments';
 	$table_residents = $wpdb->prefix . 'sr_residents';
+	$per_page        = 20;
+	$current_page    = sr_get_paged_param( 'sr_page' );
+	$total_items     = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_payments}" );
+	$total_pages     = (int) max( 1, ceil( $total_items / $per_page ) );
+	$offset          = ( $current_page - 1 ) * $per_page;
 	$current_month   = (int) current_time( 'n' );
 	$current_year    = (int) current_time( 'Y' );
 
@@ -796,7 +854,7 @@ function sr_render_payments_page() {
 	}
 
 	$residents = $wpdb->get_results( "SELECT * FROM {$table_residents} ORDER BY name ASC" );
-	$payments  = $wpdb->get_results( "SELECT * FROM {$table_payments} ORDER BY submitted_at DESC" );
+	$payments  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table_payments} ORDER BY submitted_at DESC LIMIT %d OFFSET %d", $per_page, $offset ) );
 	?>
 	<div class="wrap">
 		<h1>Indbetalinger</h1>
@@ -879,6 +937,7 @@ function sr_render_payments_page() {
 				<?php endforeach; ?>
 			</tbody>
 		</table>
+		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-payments' ), $current_page, $total_pages ); ?>
 	</div>
 	<script>
 		(function () {
@@ -947,6 +1006,11 @@ function sr_render_prices_page() {
 	}
 	global $wpdb;
 	$table_prices = $wpdb->prefix . 'sr_prices';
+	$per_page     = 20;
+	$current_page = sr_get_paged_param( 'sr_page' );
+	$total_items  = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_prices}" );
+	$total_pages  = (int) max( 1, ceil( $total_items / $per_page ) );
+	$offset       = ( $current_page - 1 ) * $per_page;
 	$current_month = (int) current_time( 'n' );
 	$current_year  = (int) current_time( 'Y' );
 
@@ -995,7 +1059,7 @@ function sr_render_prices_page() {
 		}
 	}
 
-	$prices = $wpdb->get_results( "SELECT * FROM {$table_prices} ORDER BY period_year DESC, period_month DESC LIMIT 12" );
+	$prices = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table_prices} ORDER BY period_year DESC, period_month DESC LIMIT %d OFFSET %d", $per_page, $offset ) );
 	?>
 	<div class="wrap">
 		<h1>Strømpriser</h1>
@@ -1034,6 +1098,7 @@ function sr_render_prices_page() {
 				<?php endforeach; ?>
 			</tbody>
 		</table>
+		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-prices' ), $current_page, $total_pages ); ?>
 	</div>
 	<?php
 }
@@ -1047,6 +1112,11 @@ function sr_render_locks_page() {
 	}
 	global $wpdb;
 	$table_locks = $wpdb->prefix . 'sr_period_locks';
+	$per_page     = 20;
+	$current_page = sr_get_paged_param( 'sr_page' );
+	$total_items  = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_locks}" );
+	$total_pages  = (int) max( 1, ceil( $total_items / $per_page ) );
+	$offset       = ( $current_page - 1 ) * $per_page;
 	$current_month = (int) current_time( 'n' );
 	$current_year  = (int) current_time( 'Y' );
 
@@ -1070,7 +1140,7 @@ function sr_render_locks_page() {
 		}
 	}
 
-	$locks = $wpdb->get_results( "SELECT * FROM {$table_locks} ORDER BY period_year DESC, period_month DESC" );
+	$locks = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table_locks} ORDER BY period_year DESC, period_month DESC LIMIT %d OFFSET %d", $per_page, $offset ) );
 	?>
 	<div class="wrap">
 		<h1>Periodelåsning</h1>
@@ -1107,6 +1177,7 @@ function sr_render_locks_page() {
 				<?php endforeach; ?>
 			</tbody>
 		</table>
+		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-locks' ), $current_page, $total_pages ); ?>
 	</div>
 	<?php
 }
