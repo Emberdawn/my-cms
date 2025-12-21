@@ -129,6 +129,7 @@ function sr_activate_plugin() {
 	) {$charset_collate};";
 
 	dbDelta( $sql );
+	sr_add_foreign_keys();
 
 	add_role(
 		'resident',
@@ -140,6 +141,64 @@ function sr_activate_plugin() {
 	);
 }
 register_activation_hook( __FILE__, 'sr_activate_plugin' );
+
+/**
+ * Ensure resident-linked tables cascade on delete.
+ */
+function sr_add_foreign_keys() {
+	global $wpdb;
+
+	$schema = $wpdb->dbname;
+	$table_residents = $wpdb->prefix . 'sr_residents';
+	$table_readings  = $wpdb->prefix . 'sr_meter_readings';
+	$table_payments  = $wpdb->prefix . 'sr_payments';
+	$table_summary   = $wpdb->prefix . 'sr_monthly_summary';
+
+	$foreign_keys = array(
+		array(
+			'table'      => $table_readings,
+			'column'     => 'resident_id',
+			'constraint' => 'sr_readings_resident_fk',
+		),
+		array(
+			'table'      => $table_payments,
+			'column'     => 'resident_id',
+			'constraint' => 'sr_payments_resident_fk',
+		),
+		array(
+			'table'      => $table_summary,
+			'column'     => 'resident_id',
+			'constraint' => 'sr_summary_resident_fk',
+		),
+	);
+
+	foreach ( $foreign_keys as $foreign_key ) {
+		$existing = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT CONSTRAINT_NAME
+					FROM information_schema.KEY_COLUMN_USAGE
+					WHERE TABLE_SCHEMA = %s
+					AND TABLE_NAME = %s
+					AND COLUMN_NAME = %s
+					AND REFERENCED_TABLE_NAME = %s",
+				$schema,
+				$foreign_key['table'],
+				$foreign_key['column'],
+				$table_residents
+			)
+		);
+
+		if ( ! $existing ) {
+			$wpdb->query(
+				"ALTER TABLE {$foreign_key['table']}
+					ADD CONSTRAINT {$foreign_key['constraint']}
+					FOREIGN KEY ({$foreign_key['column']})
+					REFERENCES {$table_residents}(id)
+					ON DELETE CASCADE"
+			);
+		}
+	}
+}
 
 /**
  * Add plugin menu items.
