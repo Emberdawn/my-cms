@@ -158,6 +158,7 @@ function sr_register_admin_menu() {
 	add_submenu_page( SR_PLUGIN_SLUG, 'Målerstande', 'Målerstande', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-readings', 'sr_render_readings_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Indbetalinger', 'Indbetalinger', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-payments', 'sr_render_payments_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Beboer saldo', 'Beboer saldo', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-balances', 'sr_render_balances_page' );
+	add_submenu_page( SR_PLUGIN_SLUG, 'Beboer regnskab', 'Beboer regnskab', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-resident-account', 'sr_render_resident_account_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Strømpriser', 'Strømpriser', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-prices', 'sr_render_prices_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Periodelåsning', 'Periodelåsning', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-locks', 'sr_render_locks_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'CSV-eksport', 'CSV-eksport', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-export', 'sr_render_export_page' );
@@ -185,6 +186,50 @@ function sr_get_paged_param( $key ) {
 		$page = 1;
 	}
 	return $page;
+}
+
+/**
+ * Get months difference between two periods.
+ *
+ * @param int $start_month Start month.
+ * @param int $start_year  Start year.
+ * @param int $end_month   End month.
+ * @param int $end_year    End year.
+ * @return int
+ */
+function sr_get_months_diff( $start_month, $start_year, $end_month, $end_year ) {
+	$start_total = ( (int) $start_year * 12 ) + ( (int) $start_month );
+	$end_total   = ( (int) $end_year * 12 ) + ( (int) $end_month );
+	return max( 0, $end_total - $start_total );
+}
+
+/**
+ * Add months to a period.
+ *
+ * @param int $month  Month.
+ * @param int $year   Year.
+ * @param int $offset Months to add.
+ * @return array{month:int,year:int}
+ */
+function sr_add_months_to_period( $month, $year, $offset ) {
+	$total = ( (int) $year * 12 ) + ( (int) $month ) + (int) $offset;
+	$year  = (int) floor( ( $total - 1 ) / 12 );
+	$month = (int) ( $total - ( $year * 12 ) );
+	return array(
+		'month' => $month,
+		'year'  => $year,
+	);
+}
+
+/**
+ * Get number of days in a month/year.
+ *
+ * @param int $month Month.
+ * @param int $year  Year.
+ * @return int
+ */
+function sr_get_days_in_month( $month, $year ) {
+	return (int) cal_days_in_month( CAL_GREGORIAN, (int) $month, (int) $year );
 }
 
 /**
@@ -1435,6 +1480,163 @@ function sr_render_balances_page() {
 			</tbody>
 		</table>
 		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-balances' ), $current_page, $total_pages ); ?>
+	</div>
+	<?php
+}
+
+/**
+ * Render resident account page.
+ */
+function sr_render_resident_account_page() {
+	if ( ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
+		return;
+	}
+
+	global $wpdb;
+	$table_residents = $wpdb->prefix . 'sr_residents';
+	$table_readings  = $wpdb->prefix . 'sr_meter_readings';
+
+	$residents = $wpdb->get_results( "SELECT id, name, member_number FROM {$table_residents} ORDER BY member_number ASC" );
+
+	$selected_member_number = '';
+	$selected_from_select   = '';
+	$selected_from_manual   = '';
+
+	if ( isset( $_GET['member_number_select'] ) ) {
+		$selected_from_select = sanitize_text_field( wp_unslash( $_GET['member_number_select'] ) );
+	}
+	if ( isset( $_GET['member_number_manual'] ) ) {
+		$selected_from_manual = sanitize_text_field( wp_unslash( $_GET['member_number_manual'] ) );
+	}
+
+	if ( '' !== $selected_from_manual ) {
+		$selected_member_number = $selected_from_manual;
+	} else {
+		$selected_member_number = $selected_from_select;
+	}
+
+	$resident = null;
+	if ( '' !== $selected_member_number ) {
+		$resident = $wpdb->get_row(
+			$wpdb->prepare(
+				"SELECT * FROM {$table_residents} WHERE member_number = %s",
+				$selected_member_number
+			)
+		);
+	}
+
+	$rows = array();
+	if ( $resident ) {
+		$readings = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$table_readings} WHERE resident_id = %d AND status = 'verified' ORDER BY period_year ASC, period_month ASC",
+				$resident->id
+			)
+		);
+
+		if ( count( $readings ) > 1 ) {
+			for ( $i = 1; $i < count( $readings ); $i++ ) {
+				$previous = $readings[ $i - 1 ];
+				$current  = $readings[ $i ];
+
+				$months_diff = sr_get_months_diff( $previous->period_month, $previous->period_year, $current->period_month, $current->period_year );
+				if ( $months_diff < 1 ) {
+					continue;
+				}
+
+				$total_consumption = max( 0, (float) $current->reading_kwh - (float) $previous->reading_kwh );
+				$period_consumption = $total_consumption / $months_diff;
+
+				for ( $offset = 1; $offset <= $months_diff; $offset++ ) {
+					$period = sr_add_months_to_period( $previous->period_month, $previous->period_year, $offset );
+					$price  = sr_get_price_for_period( $period['month'], $period['year'] );
+					$cost   = null === $price ? null : $period_consumption * (float) $price;
+					$rows[] = array(
+						'period_month'   => $period['month'],
+						'period_year'    => $period['year'],
+						'days_in_period' => sr_get_days_in_month( $period['month'], $period['year'] ),
+						'consumption'    => $period_consumption,
+						'price'          => $price,
+						'cost'           => $cost,
+					);
+				}
+			}
+		}
+	}
+	?>
+	<div class="wrap">
+		<h1>Beboer regnskab</h1>
+		<form method="get">
+			<input type="hidden" name="page" value="<?php echo esc_attr( SR_PLUGIN_SLUG . '-resident-account' ); ?>">
+			<table class="form-table">
+				<tr>
+					<th scope="row">Vælg beboer (medlemsnummer)</th>
+					<td>
+						<select name="member_number_select">
+							<option value="">Vælg beboer</option>
+							<?php foreach ( $residents as $resident_option ) : ?>
+								<option value="<?php echo esc_attr( $resident_option->member_number ); ?>" <?php selected( $selected_member_number, $resident_option->member_number ); ?>>
+									<?php echo esc_html( $resident_option->member_number . ' - ' . $resident_option->name ); ?>
+								</option>
+							<?php endforeach; ?>
+						</select>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row">Indtast medlemsnummer</th>
+					<td>
+						<input type="text" name="member_number_manual" value="<?php echo esc_attr( $selected_from_manual ); ?>" placeholder="Fx 12345">
+					</td>
+				</tr>
+			</table>
+			<?php submit_button( 'Vis regnskab', 'primary' ); ?>
+		</form>
+
+		<?php if ( '' !== $selected_member_number && ! $resident ) : ?>
+			<p>Ingen beboer fundet for medlemsnummeret.</p>
+		<?php endif; ?>
+
+		<?php if ( $resident ) : ?>
+			<h2>Regnskab for <?php echo esc_html( $resident->name ); ?> (<?php echo esc_html( $resident->member_number ); ?>)</h2>
+			<?php if ( empty( $rows ) ) : ?>
+				<p>Der kræves mindst to verificerede målerstande for at beregne perioder.</p>
+			<?php else : ?>
+				<table class="widefat striped">
+					<thead>
+						<tr>
+							<th>Periode</th>
+							<th>Dage i perioden</th>
+							<th>Forbrug (kWh)</th>
+							<th>Pris pr. kWh</th>
+							<th>Beløb</th>
+						</tr>
+					</thead>
+					<tbody>
+						<?php foreach ( $rows as $row ) : ?>
+							<tr>
+								<td><?php echo esc_html( $row['period_month'] . '/' . $row['period_year'] ); ?></td>
+								<td><?php echo esc_html( $row['days_in_period'] ); ?></td>
+								<td><?php echo esc_html( number_format( (float) $row['consumption'], 3, ',', '.' ) ); ?></td>
+								<td>
+									<?php if ( null === $row['price'] ) : ?>
+										Ikke angivet
+									<?php else : ?>
+										<?php echo esc_html( number_format( (float) $row['price'], 4, ',', '.' ) ); ?>
+									<?php endif; ?>
+								</td>
+								<td>
+									<?php if ( null === $row['cost'] ) : ?>
+										Ikke beregnet
+									<?php else : ?>
+										<?php echo esc_html( number_format( (float) $row['cost'], 2, ',', '.' ) ); ?> kr.
+									<?php endif; ?>
+								</td>
+							</tr>
+						<?php endforeach; ?>
+					</tbody>
+				</table>
+			<?php endif; ?>
+		<?php endif; ?>
 	</div>
 	<?php
 }
