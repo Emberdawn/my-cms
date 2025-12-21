@@ -1495,6 +1495,7 @@ function sr_render_resident_account_page() {
 	global $wpdb;
 	$table_residents = $wpdb->prefix . 'sr_residents';
 	$table_readings  = $wpdb->prefix . 'sr_meter_readings';
+	$table_payments  = $wpdb->prefix . 'sr_payments';
 
 	$residents = $wpdb->get_results( "SELECT id, name, member_number FROM {$table_residents} ORDER BY member_number ASC" );
 
@@ -1527,6 +1528,21 @@ function sr_render_resident_account_page() {
 
 	$rows = array();
 	if ( $resident ) {
+		$payments_by_period = array();
+		$payment_rows       = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT period_month, period_year, SUM(amount) AS total_amount
+				FROM {$table_payments}
+				WHERE resident_id = %d AND status = 'verified'
+				GROUP BY period_year, period_month",
+				$resident->id
+			)
+		);
+		foreach ( $payment_rows as $payment_row ) {
+			$key                         = $payment_row->period_year . '-' . $payment_row->period_month;
+			$payments_by_period[ $key ] = (float) $payment_row->total_amount;
+		}
+
 		$readings = $wpdb->get_results(
 			$wpdb->prepare(
 				"SELECT * FROM {$table_readings} WHERE resident_id = %d AND status = 'verified' ORDER BY period_year ASC, period_month ASC",
@@ -1558,9 +1574,25 @@ function sr_render_resident_account_page() {
 						'consumption'    => $period_consumption,
 						'price'          => $price,
 						'cost'           => $cost,
+						'payments'       => 0.0,
+						'balance'        => null,
 					);
 				}
 			}
+		}
+
+		$running_balance = 0.0;
+		foreach ( $rows as $index => $row ) {
+			$key                       = $row['period_year'] . '-' . $row['period_month'];
+			$payments_total            = $payments_by_period[ $key ] ?? 0.0;
+			$rows[ $index ]['payments'] = $payments_total;
+
+			if ( null === $row['cost'] ) {
+				continue;
+			}
+
+			$running_balance          += $payments_total - (float) $row['cost'];
+			$rows[ $index ]['balance'] = $running_balance;
 		}
 	}
 	?>
@@ -1609,6 +1641,8 @@ function sr_render_resident_account_page() {
 							<th>Forbrug (kWh)</th>
 							<th>Pris pr. kWh</th>
 							<th>Beløb</th>
+							<th>Indbetalinger</th>
+							<th>Saldo status</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -1629,6 +1663,20 @@ function sr_render_resident_account_page() {
 										Ikke beregnet
 									<?php else : ?>
 										<?php echo esc_html( number_format( (float) $row['cost'], 2, ',', '.' ) ); ?> kr.
+									<?php endif; ?>
+								</td>
+								<td><?php echo esc_html( number_format( (float) $row['payments'], 2, ',', '.' ) ); ?> kr.</td>
+								<?php
+								$balance_class = '';
+								if ( null !== $row['balance'] ) {
+									$balance_class = $row['balance'] < 0 ? 'sr-negative' : 'sr-positive';
+								}
+								?>
+								<td class="<?php echo esc_attr( $balance_class ); ?>">
+									<?php if ( null === $row['balance'] ) : ?>
+										Ikke beregnet
+									<?php else : ?>
+										<?php echo esc_html( number_format( (float) $row['balance'], 2, ',', '.' ) ); ?> kr.
 									<?php endif; ?>
 								</td>
 							</tr>
@@ -2294,3 +2342,20 @@ function sr_enqueue_styles() {
 	);
 }
 add_action( 'wp_enqueue_scripts', 'sr_enqueue_styles' );
+
+/**
+ * Enqueue admin styles for negative values.
+ *
+ * @param string $hook Admin page hook.
+ */
+function sr_enqueue_admin_styles( $hook ) {
+	if ( false === strpos( $hook, SR_PLUGIN_SLUG ) ) {
+		return;
+	}
+
+	wp_add_inline_style(
+		'common',
+		'.sr-negative{color:#b00020;font-weight:600}.sr-positive{color:#1a7f37;font-weight:600}'
+	);
+}
+add_action( 'admin_enqueue_scripts', 'sr_enqueue_admin_styles' );
