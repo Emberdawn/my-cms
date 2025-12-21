@@ -1593,6 +1593,8 @@ function sr_render_resident_account_page() {
 			$running_balance          += $payments_total - (float) $row['cost'];
 			$rows[ $index ]['balance'] = $running_balance;
 		}
+
+		$rows = array_reverse( $rows );
 	}
 	?>
 	<div class="wrap">
