@@ -1671,7 +1671,10 @@ function sr_render_resident_account_page() {
 										<?php echo esc_html( number_format( (float) $row['cost'], 2, ',', '.' ) ); ?> kr.
 									<?php endif; ?>
 								</td>
-								<td><?php echo esc_html( number_format( (float) $row['payments'], 2, ',', '.' ) ); ?> kr.</td>
+								<?php
+								$payments_class = $row['payments'] < 0 ? 'sr-negative' : 'sr-positive';
+								?>
+								<td class="<?php echo esc_attr( $payments_class ); ?>"><?php echo esc_html( number_format( (float) $row['payments'], 2, ',', '.' ) ); ?> kr.</td>
 								<?php
 								$balance_class = '';
 								if ( null !== $row['balance'] ) {
