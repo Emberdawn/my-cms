@@ -389,6 +389,18 @@ function sr_render_residents_page() {
 		}
 	}
 
+	if ( isset( $_POST['sr_delete_resident'] ) ) {
+		check_admin_referer( 'sr_delete_resident_action', 'sr_delete_resident_nonce' );
+		$resident_id = absint( $_POST['resident_id'] ?? 0 );
+		if ( $resident_id ) {
+			$wpdb->delete( $wpdb->prefix . 'sr_meter_readings', array( 'resident_id' => $resident_id ), array( '%d' ) );
+			$wpdb->delete( $wpdb->prefix . 'sr_payments', array( 'resident_id' => $resident_id ), array( '%d' ) );
+			$wpdb->delete( $wpdb->prefix . 'sr_monthly_summary', array( 'resident_id' => $resident_id ), array( '%d' ) );
+			$wpdb->delete( $table_residents, array( 'id' => $resident_id ), array( '%d' ) );
+			sr_log_action( 'delete', 'resident', $resident_id, 'Beboer slettet' );
+		}
+	}
+
 	$residents = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table_residents} ORDER BY name ASC LIMIT %d OFFSET %d", $per_page, $offset ) );
 	$users     = get_users();
 	?>
@@ -432,6 +444,7 @@ function sr_render_residents_page() {
 					<th>Medlemsnummer</th>
 					<th>WP-bruger</th>
 					<th>Rediger</th>
+					<th>Slet</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -449,6 +462,18 @@ function sr_render_residents_page() {
 							data-member-number="<?php echo esc_attr( $resident->member_number ); ?>"
 							data-wp-user-id="<?php echo esc_attr( $resident->wp_user_id ); ?>"
 						>Rediger</button>
+					</td>
+					<td>
+						<form method="post">
+							<?php wp_nonce_field( 'sr_delete_resident_action', 'sr_delete_resident_nonce' ); ?>
+							<input type="hidden" name="resident_id" value="<?php echo esc_attr( $resident->id ); ?>">
+							<button
+								type="submit"
+								name="sr_delete_resident"
+								class="button button-link-delete sr-delete-row"
+								data-summary="<?php echo esc_attr( 'Beboer: ' . $resident->name . ' (Medlemsnr: ' . $resident->member_number . ')' ); ?>"
+							>Slet</button>
+						</form>
 					</td>
 				</tr>
 			<?php endforeach; ?>
@@ -495,6 +520,21 @@ function sr_render_residents_page() {
 					cancelButton.style.display = 'none';
 				});
 			}
+		}());
+	</script>
+	<script>
+		(function () {
+			document.querySelectorAll('.sr-delete-row').forEach((button) => {
+				button.addEventListener('click', (event) => {
+					const summary = button.dataset.summary || '';
+					const message = summary
+						? `Er du sikker på, at du vil slette denne række?\n${summary}`
+						: 'Er du sikker på, at du vil slette denne række?';
+					if (!window.confirm(message)) {
+						event.preventDefault();
+					}
+				});
+			});
 		}());
 	</script>
 	<?php
@@ -607,6 +647,21 @@ function sr_render_readings_page() {
 		}
 	}
 
+	if ( isset( $_POST['sr_delete_reading'] ) ) {
+		check_admin_referer( 'sr_delete_reading_action', 'sr_delete_reading_nonce' );
+		$reading_id = absint( $_POST['reading_id'] ?? 0 );
+		if ( $reading_id ) {
+			$reading = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table_readings} WHERE id = %d", $reading_id ) );
+			if ( $reading ) {
+				if ( 'verified' === $reading->status ) {
+					sr_delete_summary_for_reading( $reading->resident_id, $reading->period_month, $reading->period_year );
+				}
+				$wpdb->delete( $table_readings, array( 'id' => $reading_id ), array( '%d' ) );
+				sr_log_action( 'delete', 'reading', $reading_id, 'Målerstand slettet' );
+			}
+		}
+	}
+
 	$residents = $wpdb->get_results( "SELECT * FROM {$table_residents} ORDER BY name ASC" );
 	$readings  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table_readings} ORDER BY submitted_at DESC LIMIT %d OFFSET %d", $per_page, $offset ) );
 	?>
@@ -662,6 +717,7 @@ function sr_render_readings_page() {
 					<th>Målerstand</th>
 					<th>Status</th>
 					<th>Rediger</th>
+					<th>Slet</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -686,6 +742,18 @@ function sr_render_readings_page() {
 								data-reading-kwh="<?php echo esc_attr( $reading->reading_kwh ); ?>"
 								data-status="<?php echo esc_attr( $reading->status ); ?>"
 							>Rediger</button>
+						</td>
+						<td>
+							<form method="post">
+								<?php wp_nonce_field( 'sr_delete_reading_action', 'sr_delete_reading_nonce' ); ?>
+								<input type="hidden" name="reading_id" value="<?php echo esc_attr( $reading->id ); ?>">
+								<button
+									type="submit"
+									name="sr_delete_reading"
+									class="button button-link-delete sr-delete-row"
+									data-summary="<?php echo esc_attr( 'Målerstand: ' . $resident_name . ', ' . $reading->period_month . '/' . $reading->period_year . ' (' . $reading->reading_kwh . ' kWh)' ); ?>"
+								>Slet</button>
+							</form>
 						</td>
 					</tr>
 				<?php endforeach; ?>
@@ -746,6 +814,21 @@ function sr_render_readings_page() {
 					cancelButton.style.display = 'none';
 				});
 			}
+		}());
+	</script>
+	<script>
+		(function () {
+			document.querySelectorAll('.sr-delete-row').forEach((button) => {
+				button.addEventListener('click', (event) => {
+					const summary = button.dataset.summary || '';
+					const message = summary
+						? `Er du sikker på, at du vil slette denne række?\n${summary}`
+						: 'Er du sikker på, at du vil slette denne række?';
+					if (!window.confirm(message)) {
+						event.preventDefault();
+					}
+				});
+			});
 		}());
 	</script>
 	<?php
@@ -853,6 +936,15 @@ function sr_render_payments_page() {
 		}
 	}
 
+	if ( isset( $_POST['sr_delete_payment'] ) ) {
+		check_admin_referer( 'sr_delete_payment_action', 'sr_delete_payment_nonce' );
+		$payment_id = absint( $_POST['payment_id'] ?? 0 );
+		if ( $payment_id ) {
+			$wpdb->delete( $table_payments, array( 'id' => $payment_id ), array( '%d' ) );
+			sr_log_action( 'delete', 'payment', $payment_id, 'Indbetaling slettet' );
+		}
+	}
+
 	$residents = $wpdb->get_results( "SELECT * FROM {$table_residents} ORDER BY name ASC" );
 	$payments  = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table_payments} ORDER BY submitted_at DESC LIMIT %d OFFSET %d", $per_page, $offset ) );
 	?>
@@ -908,6 +1000,7 @@ function sr_render_payments_page() {
 					<th>Beløb</th>
 					<th>Status</th>
 					<th>Rediger</th>
+					<th>Slet</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -932,6 +1025,18 @@ function sr_render_payments_page() {
 								data-amount="<?php echo esc_attr( $payment->amount ); ?>"
 								data-status="<?php echo esc_attr( $payment->status ); ?>"
 							>Rediger</button>
+						</td>
+						<td>
+							<form method="post">
+								<?php wp_nonce_field( 'sr_delete_payment_action', 'sr_delete_payment_nonce' ); ?>
+								<input type="hidden" name="payment_id" value="<?php echo esc_attr( $payment->id ); ?>">
+								<button
+									type="submit"
+									name="sr_delete_payment"
+									class="button button-link-delete sr-delete-row"
+									data-summary="<?php echo esc_attr( 'Indbetaling: ' . $resident_name . ', ' . $payment->period_month . '/' . $payment->period_year . ' (' . $payment->amount . ' kr.)' ); ?>"
+								>Slet</button>
+							</form>
 						</td>
 					</tr>
 				<?php endforeach; ?>
@@ -992,6 +1097,21 @@ function sr_render_payments_page() {
 					cancelButton.style.display = 'none';
 				});
 			}
+		}());
+	</script>
+	<script>
+		(function () {
+			document.querySelectorAll('.sr-delete-row').forEach((button) => {
+				button.addEventListener('click', (event) => {
+					const summary = button.dataset.summary || '';
+					const message = summary
+						? `Er du sikker på, at du vil slette denne række?\n${summary}`
+						: 'Er du sikker på, at du vil slette denne række?';
+					if (!window.confirm(message)) {
+						event.preventDefault();
+					}
+				});
+			});
 		}());
 	</script>
 	<?php
@@ -1059,6 +1179,15 @@ function sr_render_prices_page() {
 		}
 	}
 
+	if ( isset( $_POST['sr_delete_price'] ) ) {
+		check_admin_referer( 'sr_delete_price_action', 'sr_delete_price_nonce' );
+		$price_id = absint( $_POST['price_id'] ?? 0 );
+		if ( $price_id ) {
+			$wpdb->delete( $table_prices, array( 'id' => $price_id ), array( '%d' ) );
+			sr_log_action( 'delete', 'price', $price_id, 'Pris slettet' );
+		}
+	}
+
 	$prices = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table_prices} ORDER BY period_year DESC, period_month DESC LIMIT %d OFFSET %d", $per_page, $offset ) );
 	?>
 	<div class="wrap">
@@ -1087,6 +1216,7 @@ function sr_render_prices_page() {
 				<tr>
 					<th>Periode</th>
 					<th>Pris pr. kWh</th>
+					<th>Slet</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -1094,12 +1224,39 @@ function sr_render_prices_page() {
 					<tr>
 						<td><?php echo esc_html( $price->period_month . '/' . $price->period_year ); ?></td>
 						<td><?php echo esc_html( $price->price_per_kwh ); ?></td>
+						<td>
+							<form method="post">
+								<?php wp_nonce_field( 'sr_delete_price_action', 'sr_delete_price_nonce' ); ?>
+								<input type="hidden" name="price_id" value="<?php echo esc_attr( $price->id ); ?>">
+								<button
+									type="submit"
+									name="sr_delete_price"
+									class="button button-link-delete sr-delete-row"
+									data-summary="<?php echo esc_attr( 'Pris: ' . $price->period_month . '/' . $price->period_year . ' (' . $price->price_per_kwh . ' kr./kWh)' ); ?>"
+								>Slet</button>
+							</form>
+						</td>
 					</tr>
 				<?php endforeach; ?>
 			</tbody>
 		</table>
 		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-prices' ), $current_page, $total_pages ); ?>
 	</div>
+	<script>
+		(function () {
+			document.querySelectorAll('.sr-delete-row').forEach((button) => {
+				button.addEventListener('click', (event) => {
+					const summary = button.dataset.summary || '';
+					const message = summary
+						? `Er du sikker på, at du vil slette denne række?\n${summary}`
+						: 'Er du sikker på, at du vil slette denne række?';
+					if (!window.confirm(message)) {
+						event.preventDefault();
+					}
+				});
+			});
+		}());
+	</script>
 	<?php
 }
 
@@ -1140,6 +1297,15 @@ function sr_render_locks_page() {
 		}
 	}
 
+	if ( isset( $_POST['sr_delete_lock'] ) ) {
+		check_admin_referer( 'sr_delete_lock_action', 'sr_delete_lock_nonce' );
+		$lock_id = absint( $_POST['lock_id'] ?? 0 );
+		if ( $lock_id ) {
+			$wpdb->delete( $table_locks, array( 'id' => $lock_id ), array( '%d' ) );
+			sr_log_action( 'delete', 'period_lock', $lock_id, 'Periodelåsning slettet' );
+		}
+	}
+
 	$locks = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$table_locks} ORDER BY period_year DESC, period_month DESC LIMIT %d OFFSET %d", $per_page, $offset ) );
 	?>
 	<div class="wrap">
@@ -1165,6 +1331,7 @@ function sr_render_locks_page() {
 					<th>Periode</th>
 					<th>Låst af</th>
 					<th>Dato</th>
+					<th>Slet</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -1173,12 +1340,39 @@ function sr_render_locks_page() {
 						<td><?php echo esc_html( $lock->period_month . '/' . $lock->period_year ); ?></td>
 						<td><?php echo esc_html( $lock->locked_by ); ?></td>
 						<td><?php echo esc_html( $lock->locked_at ); ?></td>
+						<td>
+							<form method="post">
+								<?php wp_nonce_field( 'sr_delete_lock_action', 'sr_delete_lock_nonce' ); ?>
+								<input type="hidden" name="lock_id" value="<?php echo esc_attr( $lock->id ); ?>">
+								<button
+									type="submit"
+									name="sr_delete_lock"
+									class="button button-link-delete sr-delete-row"
+									data-summary="<?php echo esc_attr( 'Lås: ' . $lock->period_month . '/' . $lock->period_year . ' (låst af ' . $lock->locked_by . ')' ); ?>"
+								>Slet</button>
+							</form>
+						</td>
 					</tr>
 				<?php endforeach; ?>
 			</tbody>
 		</table>
 		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-locks' ), $current_page, $total_pages ); ?>
 	</div>
+	<script>
+		(function () {
+			document.querySelectorAll('.sr-delete-row').forEach((button) => {
+				button.addEventListener('click', (event) => {
+					const summary = button.dataset.summary || '';
+					const message = summary
+						? `Er du sikker på, at du vil slette denne række?\n${summary}`
+						: 'Er du sikker på, at du vil slette denne række?';
+					if (!window.confirm(message)) {
+						event.preventDefault();
+					}
+				});
+			});
+		}());
+	</script>
 	<?php
 }
 
