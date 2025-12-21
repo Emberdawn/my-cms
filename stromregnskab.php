@@ -1526,20 +1526,11 @@ function sr_render_resident_account_page() {
 	}
 
 	$rows = array();
-	$pending_readings_count = 0;
 	if ( $resident ) {
-		$pending_readings_count = (int) $wpdb->get_var(
-			$wpdb->prepare(
-				"SELECT COUNT(*) FROM {$table_readings} WHERE resident_id = %d AND status = %s",
-				$resident->id,
-				'pending'
-			)
-		);
 		$readings = $wpdb->get_results(
 			$wpdb->prepare(
-				"SELECT * FROM {$table_readings} WHERE resident_id = %d AND status = %s ORDER BY period_year ASC, period_month ASC",
-				$resident->id,
-				'verified'
+				"SELECT * FROM {$table_readings} WHERE resident_id = %d AND status = 'verified' ORDER BY period_year ASC, period_month ASC",
+				$resident->id
 			)
 		);
 
@@ -1607,9 +1598,6 @@ function sr_render_resident_account_page() {
 
 		<?php if ( $resident ) : ?>
 			<h2>Regnskab for <?php echo esc_html( $resident->name ); ?> (<?php echo esc_html( $resident->member_number ); ?>)</h2>
-			<?php if ( $pending_readings_count > 0 ) : ?>
-				<p><em>Afventende målerstande indgår ikke i beregningerne.</em></p>
-			<?php endif; ?>
 			<?php if ( empty( $rows ) ) : ?>
 				<p>Der kræves mindst to verificerede målerstande for at beregne perioder.</p>
 			<?php else : ?>
