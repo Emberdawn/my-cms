@@ -338,6 +338,104 @@ function sr_get_price_for_period( $month, $year ) {
 }
 
 /**
+ * Get calculated resident account rows.
+ *
+ * @param int $resident_id Resident ID.
+ * @return array<int, array<string, mixed>>
+ */
+function sr_get_resident_account_rows( $resident_id ) {
+	global $wpdb;
+	$table_readings = $wpdb->prefix . 'sr_meter_readings';
+	$table_payments = $wpdb->prefix . 'sr_payments';
+
+	$rows               = array();
+	$payments_by_period = array();
+	$payment_rows       = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT period_month, period_year, SUM(amount) AS total_amount
+			FROM {$table_payments}
+			WHERE resident_id = %d AND status = 'verified'
+			GROUP BY period_year, period_month",
+			$resident_id
+		)
+	);
+	foreach ( $payment_rows as $payment_row ) {
+		$key                         = $payment_row->period_year . '-' . $payment_row->period_month;
+		$payments_by_period[ $key ] = (float) $payment_row->total_amount;
+	}
+
+	$readings = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT * FROM {$table_readings} WHERE resident_id = %d AND status = 'verified' ORDER BY period_year ASC, period_month ASC",
+			$resident_id
+		)
+	);
+
+	if ( count( $readings ) > 1 ) {
+		for ( $i = 1; $i < count( $readings ); $i++ ) {
+			$previous = $readings[ $i - 1 ];
+			$current  = $readings[ $i ];
+
+			$months_diff = sr_get_months_diff( $previous->period_month, $previous->period_year, $current->period_month, $current->period_year );
+			if ( $months_diff < 1 ) {
+				continue;
+			}
+
+			$total_consumption  = max( 0, (float) $current->reading_kwh - (float) $previous->reading_kwh );
+			$period_consumption = $total_consumption / $months_diff;
+
+			for ( $offset = 1; $offset <= $months_diff; $offset++ ) {
+				$period = sr_add_months_to_period( $previous->period_month, $previous->period_year, $offset );
+				$price  = sr_get_price_for_period( $period['month'], $period['year'] );
+				$cost   = null === $price ? null : $period_consumption * (float) $price;
+				$rows[] = array(
+					'period_month' => $period['month'],
+					'period_year'  => $period['year'],
+					'consumption'  => $period_consumption,
+					'price'        => $price,
+					'cost'         => $cost,
+					'payments'     => 0.0,
+					'balance'      => null,
+				);
+			}
+		}
+	}
+
+	$running_balance = 0.0;
+	foreach ( $rows as $index => $row ) {
+		$key                        = $row['period_year'] . '-' . $row['period_month'];
+		$payments_total             = $payments_by_period[ $key ] ?? 0.0;
+		$rows[ $index ]['payments'] = $payments_total;
+
+		if ( null === $row['cost'] ) {
+			continue;
+		}
+
+		$running_balance          += $payments_total - (float) $row['cost'];
+		$rows[ $index ]['balance'] = $running_balance;
+	}
+
+	return array_reverse( $rows );
+}
+
+/**
+ * Get current balance status for a resident.
+ *
+ * @param int $resident_id Resident ID.
+ * @return float|null
+ */
+function sr_get_resident_balance_status( $resident_id ) {
+	$rows = sr_get_resident_account_rows( $resident_id );
+	foreach ( $rows as $row ) {
+		if ( null !== $row['balance'] ) {
+			return (float) $row['balance'];
+		}
+	}
+
+	return null;
+}
+
+/**
  * Insert audit log.
  *
  * @param string $action Action.
@@ -1465,16 +1563,31 @@ function sr_render_balances_page() {
 					<th>Beboer navn</th>
 					<th>Medlemsnummer</th>
 					<th>Totalt indbetalt</th>
-					<th>Total kilowatt brugt siden første registrering af målerstand</th>
+					<th>Total kilowatt</th>
+					<th>Saldo status</th>
 				</tr>
 			</thead>
 			<tbody>
 				<?php foreach ( $balances as $balance ) : ?>
+					<?php
+					$balance_status = sr_get_resident_balance_status( $balance->id );
+					$balance_class  = '';
+					if ( null !== $balance_status ) {
+						$balance_class = $balance_status < 0 ? 'sr-negative' : 'sr-positive';
+					}
+					?>
 					<tr>
 						<td><?php echo esc_html( $balance->name ); ?></td>
 						<td><?php echo esc_html( $balance->member_number ); ?></td>
 						<td><?php echo esc_html( number_format_i18n( (float) $balance->total_paid, 2 ) ); ?></td>
 						<td><?php echo esc_html( number_format_i18n( (float) $balance->total_kwh, 3 ) ); ?></td>
+						<td class="<?php echo esc_attr( $balance_class ); ?>">
+							<?php if ( null === $balance_status ) : ?>
+								Ikke beregnet
+							<?php else : ?>
+								<?php echo esc_html( number_format_i18n( $balance_status, 2 ) ); ?> kr.
+							<?php endif; ?>
+						</td>
 					</tr>
 				<?php endforeach; ?>
 			</tbody>
@@ -1494,8 +1607,6 @@ function sr_render_resident_account_page() {
 
 	global $wpdb;
 	$table_residents = $wpdb->prefix . 'sr_residents';
-	$table_readings  = $wpdb->prefix . 'sr_meter_readings';
-	$table_payments  = $wpdb->prefix . 'sr_payments';
 
 	$residents = $wpdb->get_results( "SELECT id, name, member_number FROM {$table_residents} ORDER BY member_number ASC" );
 
@@ -1526,77 +1637,12 @@ function sr_render_resident_account_page() {
 		);
 	}
 
-	$rows = array();
+	$rows         = array();
+	$resident_page = 1;
+	$per_page      = 20;
 	if ( $resident ) {
 		$resident_page = sr_get_paged_param( 'sr_resident_account_page' );
-		$per_page      = 20;
-		$payments_by_period = array();
-		$payment_rows       = $wpdb->get_results(
-			$wpdb->prepare(
-				"SELECT period_month, period_year, SUM(amount) AS total_amount
-				FROM {$table_payments}
-				WHERE resident_id = %d AND status = 'verified'
-				GROUP BY period_year, period_month",
-				$resident->id
-			)
-		);
-		foreach ( $payment_rows as $payment_row ) {
-			$key                         = $payment_row->period_year . '-' . $payment_row->period_month;
-			$payments_by_period[ $key ] = (float) $payment_row->total_amount;
-		}
-
-		$readings = $wpdb->get_results(
-			$wpdb->prepare(
-				"SELECT * FROM {$table_readings} WHERE resident_id = %d AND status = 'verified' ORDER BY period_year ASC, period_month ASC",
-				$resident->id
-			)
-		);
-
-		if ( count( $readings ) > 1 ) {
-			for ( $i = 1; $i < count( $readings ); $i++ ) {
-				$previous = $readings[ $i - 1 ];
-				$current  = $readings[ $i ];
-
-				$months_diff = sr_get_months_diff( $previous->period_month, $previous->period_year, $current->period_month, $current->period_year );
-				if ( $months_diff < 1 ) {
-					continue;
-				}
-
-				$total_consumption = max( 0, (float) $current->reading_kwh - (float) $previous->reading_kwh );
-				$period_consumption = $total_consumption / $months_diff;
-
-				for ( $offset = 1; $offset <= $months_diff; $offset++ ) {
-					$period = sr_add_months_to_period( $previous->period_month, $previous->period_year, $offset );
-					$price  = sr_get_price_for_period( $period['month'], $period['year'] );
-					$cost   = null === $price ? null : $period_consumption * (float) $price;
-					$rows[] = array(
-						'period_month'   => $period['month'],
-						'period_year'    => $period['year'],
-						'consumption'    => $period_consumption,
-						'price'          => $price,
-						'cost'           => $cost,
-						'payments'       => 0.0,
-						'balance'        => null,
-					);
-				}
-			}
-		}
-
-		$running_balance = 0.0;
-		foreach ( $rows as $index => $row ) {
-			$key                       = $row['period_year'] . '-' . $row['period_month'];
-			$payments_total            = $payments_by_period[ $key ] ?? 0.0;
-			$rows[ $index ]['payments'] = $payments_total;
-
-			if ( null === $row['cost'] ) {
-				continue;
-			}
-
-			$running_balance          += $payments_total - (float) $row['cost'];
-			$rows[ $index ]['balance'] = $running_balance;
-		}
-
-		$rows = array_reverse( $rows );
+		$rows          = sr_get_resident_account_rows( $resident->id );
 	}
 
 	$total_pages = 1;
