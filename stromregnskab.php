@@ -1570,7 +1570,6 @@ function sr_render_resident_account_page() {
 					$rows[] = array(
 						'period_month'   => $period['month'],
 						'period_year'    => $period['year'],
-						'days_in_period' => sr_get_days_in_month( $period['month'], $period['year'] ),
 						'consumption'    => $period_consumption,
 						'price'          => $price,
 						'cost'           => $cost,
@@ -1637,7 +1636,6 @@ function sr_render_resident_account_page() {
 					<thead>
 						<tr>
 							<th>Periode</th>
-							<th>Dage i perioden</th>
 							<th>Forbrug (kWh)</th>
 							<th>Pris pr. kWh</th>
 							<th>Beløb</th>
@@ -1649,7 +1647,6 @@ function sr_render_resident_account_page() {
 						<?php foreach ( $rows as $row ) : ?>
 							<tr>
 								<td><?php echo esc_html( $row['period_month'] . '/' . $row['period_year'] ); ?></td>
-								<td><?php echo esc_html( $row['days_in_period'] ); ?></td>
 								<td><?php echo esc_html( number_format( (float) $row['consumption'], 3, ',', '.' ) ); ?></td>
 								<td>
 									<?php if ( null === $row['price'] ) : ?>
