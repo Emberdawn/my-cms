@@ -1,5 +1,5 @@
 ---
 deployment:
   tasks:
-    - export DEPLOYPATH=/home/emberpro/public_html/my-cms/
+    - export DEPLOYPATH=/home/emberpro/public_html/wordpress_m/wp-content/plugins/my-cms-main
     - /bin/cp -R * $DEPLOYPATH
