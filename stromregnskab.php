@@ -192,16 +192,17 @@ function sr_get_paged_param( $key ) {
  * @param string $base_url    Base URL for links.
  * @param int    $page        Current page.
  * @param int    $total_pages Total pages.
+ * @param string $page_param  Query param key for pagination.
  */
-function sr_render_pagination( $base_url, $page, $total_pages ) {
+function sr_render_pagination( $base_url, $page, $total_pages, $page_param = 'sr_page' ) {
 	if ( $total_pages < 2 ) {
 		return;
 	}
 
-	$first_link = add_query_arg( 'sr_page', 1, $base_url );
-	$prev_link  = add_query_arg( 'sr_page', max( 1, $page - 1 ), $base_url );
-	$next_link  = add_query_arg( 'sr_page', min( $total_pages, $page + 1 ), $base_url );
-	$last_link  = add_query_arg( 'sr_page', $total_pages, $base_url );
+	$first_link = add_query_arg( $page_param, 1, $base_url );
+	$prev_link  = add_query_arg( $page_param, max( 1, $page - 1 ), $base_url );
+	$next_link  = add_query_arg( $page_param, min( $total_pages, $page + 1 ), $base_url );
+	$last_link  = add_query_arg( $page_param, $total_pages, $base_url );
 
 	echo '<div class="tablenav"><div class="tablenav-pages">';
 	echo '<span class="pagination-links">';
@@ -324,15 +325,230 @@ function sr_render_admin_dashboard() {
 	global $wpdb;
 	$table_readings = $wpdb->prefix . 'sr_meter_readings';
 	$table_payments = $wpdb->prefix . 'sr_payments';
+	$table_residents = $wpdb->prefix . 'sr_residents';
+	$per_page        = 20;
+	$readings_page   = sr_get_paged_param( 'sr_readings_page' );
+	$payments_page   = sr_get_paged_param( 'sr_payments_page' );
 
-	$pending_readings = $wpdb->get_var( "SELECT COUNT(*) FROM {$table_readings} WHERE status = 'pending'" );
-	$pending_payments = $wpdb->get_var( "SELECT COUNT(*) FROM {$table_payments} WHERE status = 'pending'" );
+	if ( isset( $_POST['sr_verify_pending_reading'] ) ) {
+		check_admin_referer( 'sr_verify_pending_reading_action', 'sr_verify_pending_reading_nonce' );
+		$reading_id = absint( $_POST['reading_id'] ?? 0 );
+		if ( $reading_id ) {
+			$reading = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table_readings} WHERE id = %d", $reading_id ) );
+			if ( $reading && 'pending' === $reading->status && ! sr_is_period_locked( $reading->period_month, $reading->period_year ) ) {
+				$wpdb->update(
+					$table_readings,
+					array(
+						'status'      => 'verified',
+						'verified_by' => get_current_user_id(),
+						'verified_at' => sr_now(),
+					),
+					array( 'id' => $reading_id ),
+					array( '%s', '%d', '%s' ),
+					array( '%d' )
+				);
+				sr_generate_summary_for_reading( $reading->resident_id, $reading->period_month, $reading->period_year );
+				sr_log_action( 'verify', 'reading', $reading_id, 'Målerstand verificeret' );
+				sr_notify_resident_verified( $reading->resident_id, 'målerstand' );
+			}
+		}
+	}
+
+	if ( isset( $_POST['sr_delete_pending_reading'] ) ) {
+		check_admin_referer( 'sr_delete_pending_reading_action', 'sr_delete_pending_reading_nonce' );
+		$reading_id = absint( $_POST['reading_id'] ?? 0 );
+		if ( $reading_id ) {
+			$reading = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table_readings} WHERE id = %d", $reading_id ) );
+			if ( $reading ) {
+				if ( 'verified' === $reading->status ) {
+					sr_delete_summary_for_reading( $reading->resident_id, $reading->period_month, $reading->period_year );
+				}
+				$wpdb->delete( $table_readings, array( 'id' => $reading_id ), array( '%d' ) );
+				sr_log_action( 'delete', 'reading', $reading_id, 'Målerstand slettet' );
+			}
+		}
+	}
+
+	if ( isset( $_POST['sr_verify_pending_payment'] ) ) {
+		check_admin_referer( 'sr_verify_pending_payment_action', 'sr_verify_pending_payment_nonce' );
+		$payment_id = absint( $_POST['payment_id'] ?? 0 );
+		if ( $payment_id ) {
+			$payment = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table_payments} WHERE id = %d", $payment_id ) );
+			if ( $payment && 'pending' === $payment->status && ! sr_is_period_locked( $payment->period_month, $payment->period_year ) ) {
+				$wpdb->update(
+					$table_payments,
+					array(
+						'status'      => 'verified',
+						'verified_by' => get_current_user_id(),
+						'verified_at' => sr_now(),
+					),
+					array( 'id' => $payment_id ),
+					array( '%s', '%d', '%s' ),
+					array( '%d' )
+				);
+				sr_log_action( 'verify', 'payment', $payment_id, 'Indbetaling verificeret' );
+				sr_notify_resident_verified( $payment->resident_id, 'indbetaling' );
+			}
+		}
+	}
+
+	if ( isset( $_POST['sr_delete_pending_payment'] ) ) {
+		check_admin_referer( 'sr_delete_pending_payment_action', 'sr_delete_pending_payment_nonce' );
+		$payment_id = absint( $_POST['payment_id'] ?? 0 );
+		if ( $payment_id ) {
+			$wpdb->delete( $table_payments, array( 'id' => $payment_id ), array( '%d' ) );
+			sr_log_action( 'delete', 'payment', $payment_id, 'Indbetaling slettet' );
+		}
+	}
+
+	$pending_readings = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_readings} WHERE status = 'pending'" );
+	$pending_payments = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_payments} WHERE status = 'pending'" );
+	$readings_pages   = (int) max( 1, ceil( $pending_readings / $per_page ) );
+	$payments_pages   = (int) max( 1, ceil( $pending_payments / $per_page ) );
+	$readings_offset  = ( $readings_page - 1 ) * $per_page;
+	$payments_offset  = ( $payments_page - 1 ) * $per_page;
+
+	$pending_readings_rows = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT * FROM {$table_readings} WHERE status = 'pending' ORDER BY submitted_at DESC LIMIT %d OFFSET %d",
+			$per_page,
+			$readings_offset
+		)
+	);
+	$pending_payments_rows = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT * FROM {$table_payments} WHERE status = 'pending' ORDER BY submitted_at DESC LIMIT %d OFFSET %d",
+			$per_page,
+			$payments_offset
+		)
+	);
 	?>
 	<div class="wrap">
 		<h1>Strømregnskab</h1>
 		<p>Afventende målerstande: <strong><?php echo esc_html( $pending_readings ); ?></strong></p>
 		<p>Afventende indbetalinger: <strong><?php echo esc_html( $pending_payments ); ?></strong></p>
+
+		<h2>Afventende målerstande</h2>
+		<table class="widefat striped">
+			<thead>
+				<tr>
+					<th>Dato</th>
+					<th>Beboer</th>
+					<th>Periode</th>
+					<th>Målerstand</th>
+					<th>Verificer</th>
+					<th>Slet</th>
+				</tr>
+			</thead>
+			<tbody>
+				<?php if ( $pending_readings_rows ) : ?>
+					<?php foreach ( $pending_readings_rows as $reading ) : ?>
+						<?php
+						$resident_name = $wpdb->get_var( $wpdb->prepare( "SELECT name FROM {$table_residents} WHERE id = %d", $reading->resident_id ) );
+						?>
+						<tr>
+							<td><?php echo esc_html( $reading->submitted_at ); ?></td>
+							<td><?php echo esc_html( $resident_name ); ?></td>
+							<td><?php echo esc_html( $reading->period_month . '/' . $reading->period_year ); ?></td>
+							<td><?php echo esc_html( $reading->reading_kwh ); ?></td>
+							<td>
+								<form method="post">
+									<?php wp_nonce_field( 'sr_verify_pending_reading_action', 'sr_verify_pending_reading_nonce' ); ?>
+									<input type="hidden" name="reading_id" value="<?php echo esc_attr( $reading->id ); ?>">
+									<button type="submit" name="sr_verify_pending_reading" class="button button-primary">Verificer</button>
+								</form>
+							</td>
+							<td>
+								<form method="post">
+									<?php wp_nonce_field( 'sr_delete_pending_reading_action', 'sr_delete_pending_reading_nonce' ); ?>
+									<input type="hidden" name="reading_id" value="<?php echo esc_attr( $reading->id ); ?>">
+									<button
+										type="submit"
+										name="sr_delete_pending_reading"
+										class="button button-link-delete sr-delete-row"
+										data-summary="<?php echo esc_attr( 'Målerstand: ' . $resident_name . ', ' . $reading->period_month . '/' . $reading->period_year . ' (' . $reading->reading_kwh . ' kWh)' ); ?>"
+									>Slet</button>
+								</form>
+							</td>
+						</tr>
+					<?php endforeach; ?>
+				<?php else : ?>
+					<tr>
+						<td colspan="6">Ingen afventende målerstande.</td>
+					</tr>
+				<?php endif; ?>
+			</tbody>
+		</table>
+		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG ), $readings_page, $readings_pages, 'sr_readings_page' ); ?>
+
+		<h2>Afventende indbetalinger</h2>
+		<table class="widefat striped">
+			<thead>
+				<tr>
+					<th>Dato</th>
+					<th>Beboer</th>
+					<th>Periode</th>
+					<th>Beløb</th>
+					<th>Verificer</th>
+					<th>Slet</th>
+				</tr>
+			</thead>
+			<tbody>
+				<?php if ( $pending_payments_rows ) : ?>
+					<?php foreach ( $pending_payments_rows as $payment ) : ?>
+						<?php
+						$resident_name = $wpdb->get_var( $wpdb->prepare( "SELECT name FROM {$table_residents} WHERE id = %d", $payment->resident_id ) );
+						?>
+						<tr>
+							<td><?php echo esc_html( $payment->submitted_at ); ?></td>
+							<td><?php echo esc_html( $resident_name ); ?></td>
+							<td><?php echo esc_html( $payment->period_month . '/' . $payment->period_year ); ?></td>
+							<td><?php echo esc_html( $payment->amount ); ?></td>
+							<td>
+								<form method="post">
+									<?php wp_nonce_field( 'sr_verify_pending_payment_action', 'sr_verify_pending_payment_nonce' ); ?>
+									<input type="hidden" name="payment_id" value="<?php echo esc_attr( $payment->id ); ?>">
+									<button type="submit" name="sr_verify_pending_payment" class="button button-primary">Verificer</button>
+								</form>
+							</td>
+							<td>
+								<form method="post">
+									<?php wp_nonce_field( 'sr_delete_pending_payment_action', 'sr_delete_pending_payment_nonce' ); ?>
+									<input type="hidden" name="payment_id" value="<?php echo esc_attr( $payment->id ); ?>">
+									<button
+										type="submit"
+										name="sr_delete_pending_payment"
+										class="button button-link-delete sr-delete-row"
+										data-summary="<?php echo esc_attr( 'Indbetaling: ' . $resident_name . ', ' . $payment->period_month . '/' . $payment->period_year . ' (' . $payment->amount . ' kr.)' ); ?>"
+									>Slet</button>
+								</form>
+							</td>
+						</tr>
+					<?php endforeach; ?>
+				<?php else : ?>
+					<tr>
+						<td colspan="6">Ingen afventende indbetalinger.</td>
+					</tr>
+				<?php endif; ?>
+			</tbody>
+		</table>
+		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG ), $payments_page, $payments_pages, 'sr_payments_page' ); ?>
 	</div>
+	<script>
+		(function () {
+			document.querySelectorAll('.sr-delete-row').forEach((button) => {
+				button.addEventListener('click', (event) => {
+					const summary = button.dataset.summary || '';
+					const message = summary
+						? `Er du sikker på, at du vil slette denne række?\n${summary}`
+						: 'Er du sikker på, at du vil slette denne række?';
+					if (!window.confirm(message)) {
+						event.preventDefault();
+					}
+				});
+			});
+		}());
+	</script>
 	<?php
 }
 
