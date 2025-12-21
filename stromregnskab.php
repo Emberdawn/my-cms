@@ -366,7 +366,7 @@ function sr_render_residents_page() {
 					<th>Navn</th>
 					<th>Medlemsnummer</th>
 					<th>WP-bruger</th>
-					<th>Handling</th>
+					<th>Rediger</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -383,7 +383,7 @@ function sr_render_residents_page() {
 							data-name="<?php echo esc_attr( $resident->name ); ?>"
 							data-member-number="<?php echo esc_attr( $resident->member_number ); ?>"
 							data-wp-user-id="<?php echo esc_attr( $resident->wp_user_id ); ?>"
-						>Indsæt</button>
+						>Rediger</button>
 					</td>
 				</tr>
 			<?php endforeach; ?>
@@ -563,7 +563,7 @@ function sr_render_readings_page() {
 					<th>Periode</th>
 					<th>Målerstand</th>
 					<th>Status</th>
-					<th>Handling</th>
+					<th>Rediger</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -586,7 +586,7 @@ function sr_render_readings_page() {
 								data-period-month="<?php echo esc_attr( $reading->period_month ); ?>"
 								data-period-year="<?php echo esc_attr( $reading->period_year ); ?>"
 								data-reading-kwh="<?php echo esc_attr( $reading->reading_kwh ); ?>"
-							>Indsæt</button>
+							>Rediger</button>
 							<?php if ( 'pending' === $reading->status ) : ?>
 								<a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-readings&verify_reading=' . $reading->id ), 'sr_verify_reading_' . $reading->id ) ); ?>">Verificer</a>
 							<?php else : ?>
@@ -773,7 +773,7 @@ function sr_render_payments_page() {
 					<th>Periode</th>
 					<th>Beløb</th>
 					<th>Status</th>
-					<th>Handling</th>
+					<th>Rediger</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -796,7 +796,7 @@ function sr_render_payments_page() {
 								data-period-month="<?php echo esc_attr( $payment->period_month ); ?>"
 								data-period-year="<?php echo esc_attr( $payment->period_year ); ?>"
 								data-amount="<?php echo esc_attr( $payment->amount ); ?>"
-							>Indsæt</button>
+							>Rediger</button>
 							<?php if ( 'pending' === $payment->status ) : ?>
 								<a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-payments&verify_payment=' . $payment->id ), 'sr_verify_payment_' . $payment->id ) ); ?>">Verificer</a>
 							<?php else : ?>
