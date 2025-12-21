@@ -351,6 +351,7 @@ function sr_render_residents_page() {
 	$total_items     = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_residents}" );
 	$total_pages     = (int) max( 1, ceil( $total_items / $per_page ) );
 	$offset          = ( $current_page - 1 ) * $per_page;
+	$duplicate_owner = null;
 
 	if ( isset( $_POST['sr_add_resident'] ) ) {
 		check_admin_referer( 'sr_add_resident_action', 'sr_add_resident_nonce' );
@@ -359,33 +360,44 @@ function sr_render_residents_page() {
 		$wp_user_id   = absint( $_POST['wp_user_id'] ?? 0 );
 		$resident_id  = absint( $_POST['resident_id'] ?? 0 );
 
-		if ( $name && $member_num && $resident_id ) {
-			$wpdb->update(
-				$table_residents,
-				array(
-					'name'          => $name,
-					'member_number' => $member_num,
-					'wp_user_id'    => $wp_user_id ? $wp_user_id : null,
-					'updated_at'    => sr_now(),
-				),
-				array( 'id' => $resident_id ),
-				array( '%s', '%s', '%d', '%s' ),
-				array( '%d' )
+		if ( $name && $member_num ) {
+			$existing_member = $wpdb->get_row(
+				$wpdb->prepare(
+					"SELECT id, name FROM {$table_residents} WHERE member_number = %s",
+					$member_num
+				)
 			);
-			sr_log_action( 'update', 'resident', $resident_id, 'Beboer opdateret' );
-		} elseif ( $name && $member_num ) {
-			$wpdb->insert(
-				$table_residents,
-				array(
-					'name'          => $name,
-					'member_number' => $member_num,
-					'wp_user_id'    => $wp_user_id ? $wp_user_id : null,
-					'created_at'    => sr_now(),
-					'updated_at'    => sr_now(),
-				),
-				array( '%s', '%s', '%d', '%s', '%s' )
-			);
-			sr_log_action( 'create', 'resident', $wpdb->insert_id, 'Beboer oprettet' );
+
+			if ( $existing_member && ( ! $resident_id || (int) $existing_member->id !== $resident_id ) ) {
+				$duplicate_owner = $existing_member;
+			} elseif ( $resident_id ) {
+				$wpdb->update(
+					$table_residents,
+					array(
+						'name'          => $name,
+						'member_number' => $member_num,
+						'wp_user_id'    => $wp_user_id ? $wp_user_id : null,
+						'updated_at'    => sr_now(),
+					),
+					array( 'id' => $resident_id ),
+					array( '%s', '%s', '%d', '%s' ),
+					array( '%d' )
+				);
+				sr_log_action( 'update', 'resident', $resident_id, 'Beboer opdateret' );
+			} else {
+				$wpdb->insert(
+					$table_residents,
+					array(
+						'name'          => $name,
+						'member_number' => $member_num,
+						'wp_user_id'    => $wp_user_id ? $wp_user_id : null,
+						'created_at'    => sr_now(),
+						'updated_at'    => sr_now(),
+					),
+					array( '%s', '%s', '%d', '%s', '%s' )
+				);
+				sr_log_action( 'create', 'resident', $wpdb->insert_id, 'Beboer oprettet' );
+			}
 		}
 	}
 
@@ -481,6 +493,15 @@ function sr_render_residents_page() {
 		</table>
 		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-residents' ), $current_page, $total_pages ); ?>
 	</div>
+	<?php if ( $duplicate_owner ) : ?>
+		<script>
+			window.addEventListener('load', () => {
+				window.alert(
+					'Medlemsnummeret <?php echo esc_js( $member_num ); ?> tilhører allerede <?php echo esc_js( $duplicate_owner->name ); ?>. Ingen ændringer blev gemt.'
+				);
+			});
+		</script>
+	<?php endif; ?>
 	<script>
 		(function () {
 			const form = document.getElementById('sr-resident-form');
