@@ -33,6 +33,7 @@ function sr_activate_plugin() {
 	$table_locks     = $wpdb->prefix . 'sr_period_locks';
 	$table_logs      = $wpdb->prefix . 'sr_audit_logs';
 	$table_summary   = $wpdb->prefix . 'sr_monthly_summary';
+	$table_bank_statements = $wpdb->prefix . 'sr_bank_statements';
 
 	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
@@ -126,6 +127,23 @@ function sr_activate_plugin() {
 		notes text,
 		PRIMARY KEY  (id),
 		KEY entity_type (entity_type)
+	) {$charset_collate};
+
+	CREATE TABLE {$table_bank_statements} (
+		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+		`Dato` varchar(20) NOT NULL,
+		`Tekst` text NOT NULL,
+		`Beløb` decimal(12,2) NOT NULL,
+		`Saldo` decimal(12,2) NOT NULL,
+		`Afstemt` varchar(20) NOT NULL,
+		`Kontonummer` varchar(50) NOT NULL,
+		`Kontonavn` varchar(190) NOT NULL,
+		`Kommentar` text NOT NULL,
+		row_hash char(64) NOT NULL,
+		created_at datetime NOT NULL,
+		PRIMARY KEY  (id),
+		UNIQUE KEY row_hash (row_hash),
+		KEY created_at (created_at)
 	) {$charset_collate};";
 
 	dbDelta( $sql );
@@ -221,6 +239,7 @@ function sr_register_admin_menu() {
 	add_submenu_page( SR_PLUGIN_SLUG, 'Strømpriser', 'Strømpriser', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-prices', 'sr_render_prices_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Periodelåsning', 'Periodelåsning', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-locks', 'sr_render_locks_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'CSV-eksport', 'CSV-eksport', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-export', 'sr_render_export_page' );
+	add_submenu_page( SR_PLUGIN_SLUG, 'Bankudtog', 'Bankudtog', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-bank-statements', 'sr_render_bank_statements_page' );
 }
 add_action( 'admin_menu', 'sr_register_admin_menu' );
 
@@ -2079,6 +2098,188 @@ function sr_render_locks_page() {
 			});
 		}());
 	</script>
+	<?php
+}
+
+/**
+ * Render bank statements upload page.
+ */
+function sr_render_bank_statements_page() {
+	if ( ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
+		return;
+	}
+
+	global $wpdb;
+	$table_bank_statements = $wpdb->prefix . 'sr_bank_statements';
+	$per_page              = 20;
+	$current_page          = sr_get_paged_param( 'sr_page' );
+	$message               = '';
+
+	if ( isset( $_POST['sr_upload_bank_csv'] ) ) {
+		check_admin_referer( 'sr_upload_bank_csv_action', 'sr_upload_bank_csv_nonce' );
+		$file = $_FILES['sr_bank_csv'] ?? null;
+
+		if ( ! $file || ! isset( $file['tmp_name'] ) || ! is_uploaded_file( $file['tmp_name'] ) ) {
+			$message = '<div class="notice notice-error"><p>Kunne ikke finde filen. Prøv venligst igen.</p></div>';
+		} elseif ( ! empty( $file['error'] ) ) {
+			$message = '<div class="notice notice-error"><p>Der opstod en fejl under upload af filen.</p></div>';
+		} else {
+			$added   = 0;
+			$skipped = 0;
+			$handle  = fopen( $file['tmp_name'], 'r' );
+
+			if ( false === $handle ) {
+				$message = '<div class="notice notice-error"><p>Kunne ikke åbne CSV-filen.</p></div>';
+			} else {
+				while ( ( $row = fgetcsv( $handle, 0, ';' ) ) !== false ) {
+					if ( empty( array_filter( $row, 'strlen' ) ) ) {
+						continue;
+					}
+
+					$header_check = array_map( 'trim', $row );
+					if ( isset( $header_check[0] ) && 'dato' === strtolower( $header_check[0] ) ) {
+						continue;
+					}
+
+					if ( count( $row ) < 8 ) {
+						continue;
+					}
+
+					$date           = trim( (string) $row[0] );
+					$text           = trim( (string) $row[1] );
+					$amount         = sr_normalize_decimal_input( $row[2] );
+					$balance        = sr_normalize_decimal_input( $row[3] );
+					$reconciled     = trim( (string) $row[4] );
+					$account_number = trim( (string) $row[5] );
+					$account_name   = trim( (string) $row[6] );
+					$comment        = trim( (string) $row[7] );
+
+					$hash_source = implode(
+						'|',
+						array(
+							$date,
+							$text,
+							(string) $amount,
+							(string) $balance,
+							$reconciled,
+							$account_number,
+							$account_name,
+							$comment,
+						)
+					);
+					$row_hash = hash( 'sha256', $hash_source );
+
+					$existing = $wpdb->get_var(
+						$wpdb->prepare(
+							"SELECT id FROM {$table_bank_statements} WHERE row_hash = %s",
+							$row_hash
+						)
+					);
+
+					if ( $existing ) {
+						$skipped++;
+						continue;
+					}
+
+					$inserted = $wpdb->insert(
+						$table_bank_statements,
+						array(
+							'Dato'        => $date,
+							'Tekst'       => $text,
+							'Beløb'       => $amount,
+							'Saldo'       => $balance,
+							'Afstemt'     => $reconciled,
+							'Kontonummer' => $account_number,
+							'Kontonavn'   => $account_name,
+							'Kommentar'   => $comment,
+							'row_hash'    => $row_hash,
+							'created_at'  => sr_now(),
+						),
+						array( '%s', '%s', '%f', '%f', '%s', '%s', '%s', '%s', '%s', '%s' )
+					);
+
+					if ( false !== $inserted ) {
+						$added++;
+					}
+				}
+
+				fclose( $handle );
+				$message = '<div class="notice notice-success"><p>' .
+					sprintf(
+						'Indlæsning fuldført. Tilføjede %d rækker, sprang %d rækker over (duplikater).',
+						$added,
+						$skipped
+					) .
+					'</p></div>';
+			}
+		}
+	}
+
+	$total_items = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_bank_statements}" );
+	$total_pages = (int) max( 1, ceil( $total_items / $per_page ) );
+	$offset      = ( $current_page - 1 ) * $per_page;
+	$rows        = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT * FROM {$table_bank_statements} ORDER BY id DESC LIMIT %d OFFSET %d",
+			$per_page,
+			$offset
+		)
+	);
+	?>
+	<div class="wrap">
+		<h1>Bankudtog</h1>
+		<?php echo wp_kses_post( $message ); ?>
+		<form method="post" enctype="multipart/form-data">
+			<?php wp_nonce_field( 'sr_upload_bank_csv_action', 'sr_upload_bank_csv_nonce' ); ?>
+			<table class="form-table">
+				<tr>
+					<th scope="row">CSV-fil</th>
+					<td>
+						<input type="file" name="sr_bank_csv" accept=".csv,text/csv" required>
+						<p class="description">CSV-format: Dato;Tekst;Beløb;Saldo;Afstemt;Kontonummer;Kontonavn;Kommentar</p>
+					</td>
+				</tr>
+			</table>
+			<?php submit_button( 'Upload CSV', 'primary', 'sr_upload_bank_csv' ); ?>
+		</form>
+
+		<h2>Importerede banklinjer</h2>
+		<table class="widefat striped">
+			<thead>
+				<tr>
+					<th>Dato</th>
+					<th>Tekst</th>
+					<th>Beløb</th>
+					<th>Saldo</th>
+					<th>Afstemt</th>
+					<th>Kontonummer</th>
+					<th>Kontonavn</th>
+					<th>Kommentar</th>
+				</tr>
+			</thead>
+			<tbody>
+				<?php if ( empty( $rows ) ) : ?>
+					<tr>
+						<td colspan="8">Ingen banklinjer fundet.</td>
+					</tr>
+				<?php else : ?>
+					<?php foreach ( $rows as $row ) : ?>
+						<tr>
+							<td><?php echo esc_html( $row->Dato ); ?></td>
+							<td><?php echo esc_html( $row->Tekst ); ?></td>
+							<td><?php echo esc_html( number_format( (float) $row->Beløb, 2, ',', '.' ) ); ?></td>
+							<td><?php echo esc_html( number_format( (float) $row->Saldo, 2, ',', '.' ) ); ?></td>
+							<td><?php echo esc_html( $row->Afstemt ); ?></td>
+							<td><?php echo esc_html( $row->Kontonummer ); ?></td>
+							<td><?php echo esc_html( $row->Kontonavn ); ?></td>
+							<td><?php echo esc_html( $row->Kommentar ); ?></td>
+						</tr>
+					<?php endforeach; ?>
+				<?php endif; ?>
+			</tbody>
+		</table>
+		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-bank-statements' ), $current_page, $total_pages ); ?>
+	</div>
 	<?php
 }
 
