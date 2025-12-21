@@ -1399,10 +1399,12 @@ function sr_render_balances_page() {
 			LEFT JOIN (
 				SELECT resident_id, SUM(amount) AS total_paid
 				FROM {$table_payments}
+				WHERE status = %s
 				GROUP BY resident_id
 			) pay ON r.id = pay.resident_id
 			ORDER BY r.name ASC
 			LIMIT %d OFFSET %d",
+			'verified',
 			'verified',
 			'verified',
 			$per_page,
