@@ -157,6 +157,7 @@ function sr_register_admin_menu() {
 	add_submenu_page( SR_PLUGIN_SLUG, 'Beboere', 'Beboere', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-residents', 'sr_render_residents_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Målerstande', 'Målerstande', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-readings', 'sr_render_readings_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Indbetalinger', 'Indbetalinger', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-payments', 'sr_render_payments_page' );
+	add_submenu_page( SR_PLUGIN_SLUG, 'Beboer saldo', 'Beboer saldo', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-balances', 'sr_render_balances_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Strømpriser', 'Strømpriser', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-prices', 'sr_render_prices_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Periodelåsning', 'Periodelåsning', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-locks', 'sr_render_locks_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'CSV-eksport', 'CSV-eksport', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-export', 'sr_render_export_page' );
@@ -1351,6 +1352,78 @@ function sr_render_payments_page() {
 			});
 		}());
 	</script>
+	<?php
+}
+
+/**
+ * Render resident balances page.
+ */
+function sr_render_balances_page() {
+	if ( ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
+		return;
+	}
+
+	global $wpdb;
+	$table_residents = $wpdb->prefix . 'sr_residents';
+	$table_payments  = $wpdb->prefix . 'sr_payments';
+	$table_summary   = $wpdb->prefix . 'sr_monthly_summary';
+	$per_page        = 20;
+	$current_page    = sr_get_paged_param( 'sr_page' );
+	$total_items     = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_residents}" );
+	$total_pages     = (int) max( 1, ceil( $total_items / $per_page ) );
+	$offset          = ( $current_page - 1 ) * $per_page;
+
+	$balances = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT r.id,
+				r.name,
+				r.member_number,
+				COALESCE(pay.total_paid, 0) AS total_paid,
+				COALESCE(cons.total_kwh, 0) AS total_kwh
+			FROM {$table_residents} r
+			LEFT JOIN (
+				SELECT resident_id, SUM(amount) AS total_paid
+				FROM {$table_payments}
+				WHERE status = %s
+				GROUP BY resident_id
+			) pay ON r.id = pay.resident_id
+			LEFT JOIN (
+				SELECT resident_id, SUM(consumption_kwh) AS total_kwh
+				FROM {$table_summary}
+				GROUP BY resident_id
+			) cons ON r.id = cons.resident_id
+			ORDER BY r.name ASC
+			LIMIT %d OFFSET %d",
+			'verified',
+			$per_page,
+			$offset
+		)
+	);
+	?>
+	<div class="wrap">
+		<h1>Beboer saldo</h1>
+		<table class="widefat striped">
+			<thead>
+				<tr>
+					<th>Beboer navn</th>
+					<th>Medlemsnummer</th>
+					<th>Totalt indbetalt</th>
+					<th>Total kilowatt brugt siden første registrering af målerstand</th>
+				</tr>
+			</thead>
+			<tbody>
+				<?php foreach ( $balances as $balance ) : ?>
+					<tr>
+						<td><?php echo esc_html( $balance->name ); ?></td>
+						<td><?php echo esc_html( $balance->member_number ); ?></td>
+						<td><?php echo esc_html( number_format_i18n( (float) $balance->total_paid, 2 ) ); ?></td>
+						<td><?php echo esc_html( number_format_i18n( (float) $balance->total_kwh, 3 ) ); ?></td>
+					</tr>
+				<?php endforeach; ?>
+			</tbody>
+		</table>
+		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-balances' ), $current_page, $total_pages ); ?>
+	</div>
 	<?php
 }
 
