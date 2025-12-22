@@ -2266,7 +2266,7 @@ function sr_render_bank_statements_page() {
 		<?php if ( '' !== $popup_message ) : ?>
 			<script>
 				(function() {
-					window.alert('<?php echo esc_js( $popup_message ); ?>');
+					window.alert(<?php echo wp_json_encode( $popup_message ); ?>);
 				}());
 			</script>
 		<?php endif; ?>
