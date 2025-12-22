@@ -470,6 +470,25 @@ function sr_normalize_decimal_input( $value ) {
 }
 
 /**
+ * Check if value looks like a decimal number (supports comma decimals).
+ *
+ * @param mixed $value Raw input value.
+ * @return bool
+ */
+function sr_is_decimal_like( $value ) {
+	$value = trim( (string) $value );
+	if ( '' === $value ) {
+		return false;
+	}
+	$value = str_replace( ' ', '', $value );
+	if ( str_contains( $value, ',' ) ) {
+		$value = str_replace( '.', '', $value );
+		$value = str_replace( ',', '.', $value );
+	}
+	return is_numeric( $value );
+}
+
+/**
  * Check if a period is locked.
  *
  * @param int $month Month.
@@ -2499,9 +2518,10 @@ function sr_render_bank_statements_page() {
 		} elseif ( ! empty( $file['error'] ) ) {
 			$message = '<div class="notice notice-error"><p>Der opstod en fejl under upload af filen.</p></div>';
 		} else {
-			$added   = 0;
-			$skipped = 0;
-			$read_rows = 0;
+			$added       = 0;
+			$skipped     = 0;
+			$read_rows   = 0;
+			$header_map  = array();
 			$contents = file_get_contents( $file['tmp_name'] );
 
 			if ( false === $contents ) {
@@ -2534,6 +2554,23 @@ function sr_render_bank_statements_page() {
 					$header_first = $header_check[0] ?? '';
 					$header_first = preg_replace( '/^\xEF\xBB\xBF/', '', $header_first );
 					if ( '' !== $header_first && 'dato' === strtolower( $header_first ) ) {
+						foreach ( $header_check as $index => $header ) {
+							$normalized = strtolower( remove_accents( $header ) );
+							if ( '' === $normalized ) {
+								continue;
+							}
+							if ( str_contains( $normalized, 'dato' ) ) {
+								$header_map['date'] = $index;
+							} elseif ( str_contains( $normalized, 'tekst' ) ) {
+								$header_map['text'] = $index;
+							} elseif ( str_contains( $normalized, 'belob' ) || str_contains( $normalized, 'beløb' ) ) {
+								$header_map['amount'] = $index;
+							} elseif ( str_contains( $normalized, 'saldo' ) ) {
+								$header_map['balance'] = $index;
+							} elseif ( str_contains( $normalized, 'kommentar' ) ) {
+								$header_map['comment'] = $index;
+							}
+						}
 						continue;
 					}
 
@@ -2542,16 +2579,31 @@ function sr_render_bank_statements_page() {
 					}
 
 					$read_rows++;
-					$date    = trim( (string) $row[0] );
-					$text    = trim( (string) $row[1] );
+					$date    = '';
+					$text    = '';
 					$comment = '';
-					if ( count( $row ) >= 5 ) {
+					$amount  = 0.0;
+					$balance = 0.0;
+
+					if ( ! empty( $header_map ) ) {
+						$date    = trim( (string) ( $row[ $header_map['date'] ] ?? '' ) );
+						$text    = trim( (string) ( $row[ $header_map['text'] ] ?? '' ) );
+						$comment = trim( (string) ( $row[ $header_map['comment'] ] ?? '' ) );
+						$amount  = sr_normalize_decimal_input( $row[ $header_map['amount'] ] ?? '' );
+						$balance = sr_normalize_decimal_input( $row[ $header_map['balance'] ] ?? '' );
+					} elseif ( count( $row ) >= 5 && ! sr_is_decimal_like( $row[2] ) && sr_is_decimal_like( $row[3] ) ) {
 						$comment = trim( (string) $row[2] );
 						$amount  = sr_normalize_decimal_input( $row[3] );
 						$balance = sr_normalize_decimal_input( $row[4] );
 					} else {
+						$date    = trim( (string) $row[0] );
+						$text    = trim( (string) $row[1] );
 						$amount  = sr_normalize_decimal_input( $row[2] );
 						$balance = sr_normalize_decimal_input( $row[3] );
+					}
+
+					if ( '' === $date && '' === $text ) {
+						continue;
 					}
 
 					$hash_source = implode(
@@ -2649,7 +2701,7 @@ function sr_render_bank_statements_page() {
 					<th scope="row">CSV-fil</th>
 					<td>
 						<input type="file" name="sr_bank_csv" accept=".csv,text/csv" required>
-						<p class="description">CSV-format: Dato;Tekst;Kommentar;Beløb;Saldo</p>
+						<p class="description">CSV-format: Dato;Tekst;Beløb;Saldo (Kommentar-kolonne og ekstra bankkolonner understøttes).</p>
 					</td>
 				</tr>
 			</table>
