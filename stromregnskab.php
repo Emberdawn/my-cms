@@ -1417,20 +1417,35 @@ function sr_render_payments_page() {
 		$payment_id  = absint( $_POST['payment_id'] ?? 0 );
 		$is_verified = ! empty( $_POST['payment_verified'] );
 		$bank_statement_id = $bank_statement_id ? $bank_statement_id : null;
+		$skip_payment_update = false;
 
 		if ( $bank_statement_id ) {
-			$bank_statement_exists = $wpdb->get_var(
+			$bank_statement = $wpdb->get_row(
 				$wpdb->prepare(
-					"SELECT id FROM {$table_bank_statements} WHERE id = %d",
+					"SELECT * FROM {$table_bank_statements} WHERE id = %d",
 					$bank_statement_id
 				)
 			);
-			if ( ! $bank_statement_exists ) {
+			if ( ! $bank_statement ) {
 				$message = '<div class="notice notice-error"><p>Det valgte bankudtog findes ikke længere.</p></div>';
 				$bank_statement_id = null;
 			}
 
 			if ( $bank_statement_id ) {
+				$period = sr_get_period_from_bank_statement_date( $bank_statement->Dato );
+				if ( ! $period ) {
+					$message = '<div class="notice notice-error"><p>Kunne ikke aflæse datoen fra bankudtoget.</p></div>';
+					$skip_payment_update = true;
+				} elseif ( sr_is_period_locked( $period['month'], $period['year'] ) ) {
+					$message = '<div class="notice notice-error"><p>Perioden er låst og kan ikke bruges til indbetaling.</p></div>';
+					$skip_payment_update = true;
+				} else {
+					$month = $period['month'];
+					$year  = $period['year'];
+				}
+			}
+
+			if ( $bank_statement_id && ! $skip_payment_update ) {
 				$linked_payment = $wpdb->get_var(
 					$wpdb->prepare(
 						"SELECT id FROM {$table_payments} WHERE bank_statement_id = %d AND id != %d",
@@ -1445,7 +1460,7 @@ function sr_render_payments_page() {
 			}
 		}
 
-		if ( $resident_id && $month && $year && $payment_id && ! sr_is_period_locked( $month, $year ) ) {
+		if ( $resident_id && $month && $year && $payment_id && ! $skip_payment_update && ! sr_is_period_locked( $month, $year ) ) {
 			$existing = $wpdb->get_row( $wpdb->prepare( "SELECT id FROM {$table_payments} WHERE id = %d", $payment_id ) );
 			if ( $existing ) {
 				$new_status = $is_verified ? 'verified' : 'pending';
@@ -1490,7 +1505,7 @@ function sr_render_payments_page() {
 					sr_log_action( 'unverify', 'payment', $payment_id, 'Indbetaling markeret som ikke verificeret' );
 				}
 			}
-		} elseif ( $resident_id && $month && $year && ! sr_is_period_locked( $month, $year ) ) {
+		} elseif ( $resident_id && $month && $year && ! $skip_payment_update && ! sr_is_period_locked( $month, $year ) ) {
 			$status = $is_verified ? 'verified' : 'pending';
 			$insert_data = array(
 				'resident_id' => $resident_id,
@@ -1527,21 +1542,35 @@ function sr_render_payments_page() {
 		$payment_id        = absint( $_POST['payment_id'] ?? 0 );
 		$bank_statement_id = absint( $_POST['bank_statement_id'] ?? 0 );
 		$bank_statement_id = $bank_statement_id ? $bank_statement_id : null;
+		$period_month      = null;
+		$period_year       = null;
 
 		if ( $payment_id ) {
 			if ( $bank_statement_id ) {
-				$bank_statement_exists = $wpdb->get_var(
+				$bank_statement = $wpdb->get_row(
 					$wpdb->prepare(
-						"SELECT id FROM {$table_bank_statements} WHERE id = %d",
+						"SELECT * FROM {$table_bank_statements} WHERE id = %d",
 						$bank_statement_id
 					)
 				);
-				if ( ! $bank_statement_exists ) {
+				if ( ! $bank_statement ) {
 					$message = '<div class="notice notice-error"><p>Det valgte bankudtog findes ikke længere.</p></div>';
 					$bank_statement_id = null;
 				}
 
 				if ( $bank_statement_id ) {
+					$period = sr_get_period_from_bank_statement_date( $bank_statement->Dato );
+					if ( ! $period ) {
+						$message = '<div class="notice notice-error"><p>Kunne ikke aflæse datoen fra bankudtoget.</p></div>';
+					} elseif ( sr_is_period_locked( $period['month'], $period['year'] ) ) {
+						$message = '<div class="notice notice-error"><p>Perioden er låst og kan ikke bruges til indbetaling.</p></div>';
+					} else {
+						$period_month = $period['month'];
+						$period_year  = $period['year'];
+					}
+				}
+
+				if ( $bank_statement_id && '' === $message ) {
 					$linked_payment = $wpdb->get_var(
 						$wpdb->prepare(
 							"SELECT id FROM {$table_payments} WHERE bank_statement_id = %d AND id != %d",
@@ -1557,11 +1586,19 @@ function sr_render_payments_page() {
 			}
 
 			if ( '' === $message ) {
+				$update_data = array( 'bank_statement_id' => $bank_statement_id );
+				$update_format = array( '%d' );
+				if ( null !== $period_month && null !== $period_year ) {
+					$update_data['period_month'] = $period_month;
+					$update_data['period_year']  = $period_year;
+					$update_format[] = '%d';
+					$update_format[] = '%d';
+				}
 				$wpdb->update(
 					$table_payments,
-					array( 'bank_statement_id' => $bank_statement_id ),
+					$update_data,
 					array( 'id' => $payment_id ),
-					array( '%d' ),
+					$update_format,
 					array( '%d' )
 				);
 				sr_log_action( 'update', 'payment', $payment_id, 'Bankudtog tilknytning opdateret' );
