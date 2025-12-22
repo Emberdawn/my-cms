@@ -2819,16 +2819,16 @@ function sr_render_bank_statement_link_page() {
 								<?php if ( $row->payment_id ) : ?>
 									<?php echo esc_html( $resident_member_numbers[ (int) $row->linked_resident_id ] ?? 'Ukendt' ); ?>
 								<?php else : ?>
-									<form method="post">
+									<form method="post" class="sr-link-payment-form">
 										<?php wp_nonce_field( 'sr_link_bank_payment_action', 'sr_link_bank_payment_nonce' ); ?>
 										<input type="hidden" name="bank_statement_id" value="<?php echo esc_attr( $row->id ); ?>">
-										<select name="resident_id" required>
+										<select name="resident_id" class="sr-link-payment-member" required>
 											<option value="">dns</option>
 											<?php foreach ( $residents as $resident ) : ?>
 												<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->member_number ); ?></option>
 											<?php endforeach; ?>
 										</select>
-										<select name="resident_id_name">
+										<select name="resident_id_name" class="sr-link-payment-name">
 											<option value="">Vælg navn</option>
 											<?php foreach ( $residents as $resident ) : ?>
 												<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->name ); ?></option>
@@ -2851,6 +2851,29 @@ function sr_render_bank_statement_link_page() {
 		</table>
 		<?php sr_render_pagination( admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-bank-link-payments' ), $current_page, $total_pages ); ?>
 	</div>
+	<script>
+		document.querySelectorAll('.sr-link-payment-form').forEach((form) => {
+			const memberSelect = form.querySelector('.sr-link-payment-member');
+			const nameSelect = form.querySelector('.sr-link-payment-name');
+
+			if (!memberSelect || !nameSelect) {
+				return;
+			}
+
+			const syncSelects = (source, target) => {
+				const nextValue = source.value || '';
+				target.value = nextValue;
+			};
+
+			memberSelect.addEventListener('change', () => {
+				syncSelects(memberSelect, nameSelect);
+			});
+
+			nameSelect.addEventListener('change', () => {
+				syncSelects(nameSelect, memberSelect);
+			});
+		});
+	</script>
 	<?php
 }
 
