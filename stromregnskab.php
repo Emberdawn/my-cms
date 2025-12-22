@@ -2681,6 +2681,9 @@ function sr_render_bank_statement_link_page() {
 		check_admin_referer( 'sr_link_bank_payment_action', 'sr_link_bank_payment_nonce' );
 		$bank_statement_id = absint( $_POST['bank_statement_id'] ?? 0 );
 		$resident_id       = absint( $_POST['resident_id'] ?? 0 );
+		if ( ! $resident_id ) {
+			$resident_id = absint( $_POST['resident_id_name'] ?? 0 );
+		}
 
 		if ( ! $bank_statement_id || ! $resident_id ) {
 			$message = '<div class="notice notice-error"><p>Vælg både bankudtog og beboer.</p></div>';
@@ -2771,7 +2774,7 @@ function sr_render_bank_statement_link_page() {
 		)
 	);
 
-	$residents = $wpdb->get_results( "SELECT id, member_number FROM {$table_residents} ORDER BY member_number ASC" );
+	$residents = $wpdb->get_results( "SELECT id, member_number, name FROM {$table_residents} ORDER BY member_number ASC" );
 	$resident_member_numbers = array();
 	foreach ( $residents as $resident ) {
 		$resident_member_numbers[ (int) $resident->id ] = $resident->member_number;
@@ -2820,9 +2823,15 @@ function sr_render_bank_statement_link_page() {
 										<?php wp_nonce_field( 'sr_link_bank_payment_action', 'sr_link_bank_payment_nonce' ); ?>
 										<input type="hidden" name="bank_statement_id" value="<?php echo esc_attr( $row->id ); ?>">
 										<select name="resident_id" required>
-											<option value="">Vælg medlemsnummer</option>
+											<option value="">dns</option>
 											<?php foreach ( $residents as $resident ) : ?>
 												<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->member_number ); ?></option>
+											<?php endforeach; ?>
+										</select>
+										<select name="resident_id_name">
+											<option value="">Vælg navn</option>
+											<?php foreach ( $residents as $resident ) : ?>
+												<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->name ); ?></option>
 											<?php endforeach; ?>
 										</select>
 								<?php endif; ?>
