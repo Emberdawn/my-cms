@@ -2798,7 +2798,6 @@ function sr_render_bank_statement_link_page() {
 					<th>Dato</th>
 					<th>Tekst</th>
 					<th>Beløb</th>
-					<th>Saldo</th>
 					<th>dns</th>
 					<th>Handling</th>
 				</tr>
@@ -2806,7 +2805,7 @@ function sr_render_bank_statement_link_page() {
 			<tbody>
 				<?php if ( empty( $rows ) ) : ?>
 					<tr>
-						<td colspan="6">Ingen banklinjer fundet.</td>
+						<td colspan="5">Ingen banklinjer fundet.</td>
 					</tr>
 				<?php else : ?>
 					<?php foreach ( $rows as $row ) : ?>
@@ -2814,7 +2813,6 @@ function sr_render_bank_statement_link_page() {
 							<td><?php echo esc_html( $row->Dato ); ?></td>
 							<td><?php echo esc_html( $row->Tekst ); ?></td>
 							<td><?php echo esc_html( number_format( (float) $row->Beløb, 2, ',', '.' ) ); ?></td>
-							<td><?php echo esc_html( number_format( (float) $row->Saldo, 2, ',', '.' ) ); ?></td>
 							<td>
 								<?php if ( $row->payment_id ) : ?>
 									<?php echo esc_html( $resident_member_numbers[ (int) $row->linked_resident_id ] ?? 'Ukendt' ); ?>
