@@ -2238,7 +2238,13 @@ function sr_render_bank_statements_page() {
 	$offset      = ( $current_page - 1 ) * $per_page;
 	$rows        = $wpdb->get_results(
 		$wpdb->prepare(
-			"SELECT * FROM {$table_bank_statements} ORDER BY COALESCE(STR_TO_DATE(`Dato`, '%%d-%%m-%%Y'), created_at) DESC, id DESC LIMIT %d OFFSET %d",
+			"SELECT * FROM {$table_bank_statements} ORDER BY COALESCE(
+				STR_TO_DATE(`Dato`, '%%d-%%m-%%Y'),
+				STR_TO_DATE(`Dato`, '%%d/%%m/%%Y'),
+				STR_TO_DATE(`Dato`, '%%d.%%m.%%Y'),
+				STR_TO_DATE(`Dato`, '%%Y-%%m-%%d'),
+				created_at
+			) DESC, id DESC LIMIT %d OFFSET %d",
 			$per_page,
 			$offset
 		)
