@@ -135,10 +135,7 @@ function sr_activate_plugin() {
 		`Tekst` text NOT NULL,
 		`Beløb` decimal(12,2) NOT NULL,
 		`Saldo` decimal(12,2) NOT NULL,
-		`Afstemt` varchar(20) NOT NULL,
-		`Kontonummer` varchar(50) NOT NULL,
 		`Kontonavn` varchar(190) NOT NULL,
-		`Kommentar` text NOT NULL,
 		row_hash char(64) NOT NULL,
 		created_at datetime NOT NULL,
 		PRIMARY KEY  (id),
@@ -2161,7 +2158,7 @@ function sr_render_bank_statements_page() {
 						continue;
 					}
 
-					if ( count( $row ) < 8 ) {
+					if ( count( $row ) < 5 ) {
 						continue;
 					}
 
@@ -2169,10 +2166,7 @@ function sr_render_bank_statements_page() {
 					$text           = trim( (string) $row[1] );
 					$amount         = sr_normalize_decimal_input( $row[2] );
 					$balance        = sr_normalize_decimal_input( $row[3] );
-					$reconciled     = trim( (string) $row[4] );
-					$account_number = trim( (string) $row[5] );
-					$account_name   = trim( (string) $row[6] );
-					$comment        = trim( (string) $row[7] );
+					$account_name   = trim( (string) $row[4] );
 
 					$hash_source = implode(
 						'|',
@@ -2181,10 +2175,7 @@ function sr_render_bank_statements_page() {
 							$text,
 							(string) $amount,
 							(string) $balance,
-							$reconciled,
-							$account_number,
 							$account_name,
-							$comment,
 						)
 					);
 					$row_hash = hash( 'sha256', $hash_source );
@@ -2208,14 +2199,11 @@ function sr_render_bank_statements_page() {
 							'Tekst'       => $text,
 							'Beløb'       => $amount,
 							'Saldo'       => $balance,
-							'Afstemt'     => $reconciled,
-							'Kontonummer' => $account_number,
 							'Kontonavn'   => $account_name,
-							'Kommentar'   => $comment,
 							'row_hash'    => $row_hash,
 							'created_at'  => sr_now(),
 						),
-						array( '%s', '%s', '%f', '%f', '%s', '%s', '%s', '%s', '%s', '%s' )
+						array( '%s', '%s', '%f', '%f', '%s', '%s', '%s' )
 					);
 
 					if ( false !== $inserted ) {
@@ -2255,7 +2243,7 @@ function sr_render_bank_statements_page() {
 					<th scope="row">CSV-fil</th>
 					<td>
 						<input type="file" name="sr_bank_csv" accept=".csv,text/csv" required>
-						<p class="description">CSV-format: Dato;Tekst;Beløb;Saldo;Afstemt;Kontonummer;Kontonavn;Kommentar</p>
+						<p class="description">CSV-format: Dato;Tekst;Beløb;Saldo;Kontonavn</p>
 					</td>
 				</tr>
 			</table>
@@ -2270,16 +2258,13 @@ function sr_render_bank_statements_page() {
 					<th>Tekst</th>
 					<th>Beløb</th>
 					<th>Saldo</th>
-					<th>Afstemt</th>
-					<th>Kontonummer</th>
 					<th>Kontonavn</th>
-					<th>Kommentar</th>
 				</tr>
 			</thead>
 			<tbody>
 				<?php if ( empty( $rows ) ) : ?>
 					<tr>
-						<td colspan="8">Ingen banklinjer fundet.</td>
+						<td colspan="5">Ingen banklinjer fundet.</td>
 					</tr>
 				<?php else : ?>
 					<?php foreach ( $rows as $row ) : ?>
@@ -2288,10 +2273,7 @@ function sr_render_bank_statements_page() {
 							<td><?php echo esc_html( $row->Tekst ); ?></td>
 							<td><?php echo esc_html( number_format( (float) $row->Beløb, 2, ',', '.' ) ); ?></td>
 							<td><?php echo esc_html( number_format( (float) $row->Saldo, 2, ',', '.' ) ); ?></td>
-							<td><?php echo esc_html( $row->Afstemt ); ?></td>
-							<td><?php echo esc_html( $row->Kontonummer ); ?></td>
 							<td><?php echo esc_html( $row->Kontonavn ); ?></td>
-							<td><?php echo esc_html( $row->Kommentar ); ?></td>
 						</tr>
 					<?php endforeach; ?>
 				<?php endif; ?>
