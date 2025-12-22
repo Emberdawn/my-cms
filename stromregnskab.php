@@ -2138,6 +2138,16 @@ function sr_render_bank_statements_page() {
 				$lines    = array_filter( array_map( 'trim', explode( "\n", $contents ) ), 'strlen' );
 
 				foreach ( $lines as $line ) {
+					$trimmed_line = trim( $line );
+
+					if ( '' === $trimmed_line ) {
+						continue;
+					}
+
+					if ( preg_match( '/^sep\\s*=/i', $trimmed_line ) ) {
+						continue;
+					}
+
 					$row = str_getcsv( $line, ';' );
 
 					if ( empty( array_filter( $row, 'strlen' ) ) ) {
@@ -2145,7 +2155,9 @@ function sr_render_bank_statements_page() {
 					}
 
 					$header_check = array_map( 'trim', $row );
-					if ( isset( $header_check[0] ) && 'dato' === strtolower( $header_check[0] ) ) {
+					$header_first = $header_check[0] ?? '';
+					$header_first = preg_replace( '/^\xEF\xBB\xBF/', '', $header_first );
+					if ( '' !== $header_first && 'dato' === strtolower( $header_first ) ) {
 						continue;
 					}
 
