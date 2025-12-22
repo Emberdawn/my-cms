@@ -2234,7 +2234,7 @@ function sr_render_bank_statements_page() {
 					) .
 					'</p></div>';
 				$popup_message = sprintf(
-					'Indlæsning fuldført.\nLæste rækker: %d\nIndsatte rækker: %d\nSkippede rækker (duplikater): %d',
+					"Indlæsning fuldført.\nLæste rækker: %d\nIndsatte rækker: %d\nSkippede rækker (duplikater): %d",
 					$read_rows,
 					$added,
 					$skipped
