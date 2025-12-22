@@ -1418,6 +1418,7 @@ function sr_render_payments_page() {
 		$is_verified = ! empty( $_POST['payment_verified'] );
 		$bank_statement_id = $bank_statement_id ? $bank_statement_id : null;
 		$skip_payment_update = false;
+		$bank_statement_amount = null;
 
 		if ( $bank_statement_id ) {
 			$bank_statement = $wpdb->get_row(
@@ -1432,6 +1433,7 @@ function sr_render_payments_page() {
 			}
 
 			if ( $bank_statement_id ) {
+				$bank_statement_amount = sr_normalize_decimal_input( $bank_statement->Beløb ?? 0 );
 				$period = sr_get_period_from_bank_statement_date( $bank_statement->Dato );
 				if ( ! $period ) {
 					$message = '<div class="notice notice-error"><p>Kunne ikke aflæse datoen fra bankudtoget.</p></div>';
@@ -1458,6 +1460,10 @@ function sr_render_payments_page() {
 					$bank_statement_id = null;
 				}
 			}
+		}
+
+		if ( null !== $bank_statement_amount ) {
+			$amount = $bank_statement_amount;
 		}
 
 		if ( $resident_id && $month && $year && $payment_id && ! $skip_payment_update && ! sr_is_period_locked( $month, $year ) ) {
@@ -1544,6 +1550,7 @@ function sr_render_payments_page() {
 		$bank_statement_id = $bank_statement_id ? $bank_statement_id : null;
 		$period_month      = null;
 		$period_year       = null;
+		$bank_statement_amount = null;
 
 		if ( $payment_id ) {
 			if ( $bank_statement_id ) {
@@ -1559,6 +1566,7 @@ function sr_render_payments_page() {
 				}
 
 				if ( $bank_statement_id ) {
+					$bank_statement_amount = sr_normalize_decimal_input( $bank_statement->Beløb ?? 0 );
 					$period = sr_get_period_from_bank_statement_date( $bank_statement->Dato );
 					if ( ! $period ) {
 						$message = '<div class="notice notice-error"><p>Kunne ikke aflæse datoen fra bankudtoget.</p></div>';
@@ -1593,6 +1601,10 @@ function sr_render_payments_page() {
 					$update_data['period_year']  = $period_year;
 					$update_format[] = '%d';
 					$update_format[] = '%d';
+				}
+				if ( null !== $bank_statement_amount ) {
+					$update_data['amount'] = $bank_statement_amount;
+					$update_format[] = '%f';
 				}
 				$wpdb->update(
 					$table_payments,
@@ -1685,7 +1697,7 @@ function sr_render_payments_page() {
 						<select name="bank_statement_id" id="sr_payment_bank_statement">
 							<option value="">Vælg bankudtog</option>
 							<?php foreach ( $unlinked_bank_statements as $statement ) : ?>
-								<option value="<?php echo esc_attr( $statement->id ); ?>">
+								<option value="<?php echo esc_attr( $statement->id ); ?>" data-amount="<?php echo esc_attr( $statement->Beløb ); ?>">
 									<?php echo esc_html( sr_get_bank_statement_label( $statement ) ); ?>
 								</option>
 							<?php endforeach; ?>
@@ -1783,6 +1795,7 @@ function sr_render_payments_page() {
 								data-status="<?php echo esc_attr( $payment->status ); ?>"
 								data-bank-statement-id="<?php echo esc_attr( (int) $payment->bank_statement_id ); ?>"
 								data-bank-statement-label="<?php echo esc_attr( $bank_statement_label ); ?>"
+								data-bank-statement-amount="<?php echo esc_attr( $bank_statement ? $bank_statement->Beløb : '' ); ?>"
 							>Rediger</button>
 						</td>
 						<td>
@@ -1821,6 +1834,19 @@ function sr_render_payments_page() {
 			const defaultLabel = submitButton ? submitButton.value : '';
 			const currentMonth = form.dataset.currentMonth || '';
 			const currentYear = form.dataset.currentYear || '';
+			const updateAmountFromStatement = (statementField) => {
+				if (!statementField || !amountField) {
+					return;
+				}
+				const selectedOption = statementField.options[statementField.selectedIndex];
+				if (!selectedOption) {
+					return;
+				}
+				const optionAmount = selectedOption.dataset.amount;
+				if (optionAmount) {
+					amountField.value = optionAmount;
+				}
+			};
 
 			document.querySelectorAll('.sr-fill-payment').forEach((button) => {
 				button.addEventListener('click', () => {
@@ -1835,12 +1861,16 @@ function sr_render_payments_page() {
 					if (bankStatementField) {
 						const bankStatementId = button.dataset.bankStatementId || '';
 						const bankStatementLabel = button.dataset.bankStatementLabel || '';
+						const bankStatementAmount = button.dataset.bankStatementAmount || '';
 						if (bankStatementId) {
 							let option = bankStatementField.querySelector(`option[value="${bankStatementId}"]`);
 							if (!option && bankStatementLabel) {
 								option = document.createElement('option');
 								option.value = bankStatementId;
 								option.textContent = bankStatementLabel;
+								if (bankStatementAmount) {
+									option.dataset.amount = bankStatementAmount;
+								}
 								bankStatementField.appendChild(option);
 							}
 							bankStatementField.value = bankStatementId;
@@ -1874,6 +1904,12 @@ function sr_render_payments_page() {
 						submitButton.value = defaultLabel;
 					}
 					cancelButton.style.display = 'none';
+				});
+			}
+
+			if (bankStatementField) {
+				bankStatementField.addEventListener('change', () => {
+					updateAmountFromStatement(bankStatementField);
 				});
 			}
 		}());
