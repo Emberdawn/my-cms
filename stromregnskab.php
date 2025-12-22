@@ -2739,11 +2739,17 @@ function sr_render_bank_statement_link_page() {
 		}
 	}
 
+	$hide_negative = isset( $_GET['sr_hide_negative'] ) && '1' === $_GET['sr_hide_negative'];
+	$where_clauses = array( 'p.id IS NULL' );
+	if ( $hide_negative ) {
+		$where_clauses[] = 'b.`Beløb` >= 0';
+	}
+	$where_sql   = 'WHERE ' . implode( ' AND ', $where_clauses );
 	$total_items = (int) $wpdb->get_var(
 		"SELECT COUNT(*)
 			FROM {$table_bank_statements} b
 			LEFT JOIN {$table_payments} p ON b.id = p.bank_statement_id
-			WHERE p.id IS NULL"
+			{$where_sql}"
 	);
 	$total_pages = (int) max( 1, ceil( $total_items / $per_page ) );
 	$offset      = ( $current_page - 1 ) * $per_page;
@@ -2752,7 +2758,7 @@ function sr_render_bank_statement_link_page() {
 			"SELECT b.*, p.id AS payment_id, p.resident_id AS linked_resident_id
 				FROM {$table_bank_statements} b
 				LEFT JOIN {$table_payments} p ON b.id = p.bank_statement_id
-				WHERE p.id IS NULL
+				{$where_sql}
 				ORDER BY COALESCE(
 					STR_TO_DATE(b.`Dato`, '%%d-%%m-%%Y'),
 					STR_TO_DATE(b.`Dato`, '%%d/%%m/%%Y'),
@@ -2774,6 +2780,14 @@ function sr_render_bank_statement_link_page() {
 	<div class="wrap">
 		<h1>Tilknyt betalinger</h1>
 		<?php echo wp_kses_post( $message ); ?>
+		<form method="get" style="margin: 12px 0;">
+			<input type="hidden" name="page" value="<?php echo esc_attr( SR_PLUGIN_SLUG . '-bank-link-payments' ); ?>">
+			<label>
+				<input type="checkbox" name="sr_hide_negative" value="1" <?php checked( $hide_negative ); ?>>
+				Skjul negative posteringer
+			</label>
+			<button type="submit" class="button">Opdater</button>
+		</form>
 		<table class="widefat striped">
 			<thead>
 				<tr>
