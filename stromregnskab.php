@@ -2739,7 +2739,12 @@ function sr_render_bank_statement_link_page() {
 		}
 	}
 
-	$total_items = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_bank_statements}" );
+	$total_items = (int) $wpdb->get_var(
+		"SELECT COUNT(*)
+			FROM {$table_bank_statements} b
+			LEFT JOIN {$table_payments} p ON b.id = p.bank_statement_id
+			WHERE p.id IS NULL"
+	);
 	$total_pages = (int) max( 1, ceil( $total_items / $per_page ) );
 	$offset      = ( $current_page - 1 ) * $per_page;
 	$rows        = $wpdb->get_results(
@@ -2747,6 +2752,7 @@ function sr_render_bank_statement_link_page() {
 			"SELECT b.*, p.id AS payment_id, p.resident_id AS linked_resident_id
 				FROM {$table_bank_statements} b
 				LEFT JOIN {$table_payments} p ON b.id = p.bank_statement_id
+				WHERE p.id IS NULL
 				ORDER BY COALESCE(
 					STR_TO_DATE(b.`Dato`, '%%d-%%m-%%Y'),
 					STR_TO_DATE(b.`Dato`, '%%d/%%m/%%Y'),
