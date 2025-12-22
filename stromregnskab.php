@@ -135,7 +135,6 @@ function sr_activate_plugin() {
 		`Tekst` text NOT NULL,
 		`Beløb` decimal(12,2) NOT NULL,
 		`Saldo` decimal(12,2) NOT NULL,
-		`Kontonavn` varchar(190) NOT NULL,
 		row_hash char(64) NOT NULL,
 		created_at datetime NOT NULL,
 		PRIMARY KEY  (id),
@@ -145,6 +144,7 @@ function sr_activate_plugin() {
 
 	dbDelta( $sql );
 	sr_add_foreign_keys();
+	sr_remove_bank_statement_account_name_column();
 
 	add_role(
 		'resident',
@@ -212,6 +212,20 @@ function sr_add_foreign_keys() {
 					ON DELETE CASCADE"
 			);
 		}
+	}
+}
+
+/**
+ * Remove Kontonavn column from bank statements table if it exists.
+ */
+function sr_remove_bank_statement_account_name_column() {
+	global $wpdb;
+
+	$table_bank_statements = $wpdb->prefix . 'sr_bank_statements';
+	$column_exists         = $wpdb->get_var( $wpdb->prepare( "SHOW COLUMNS FROM {$table_bank_statements} LIKE %s", 'Kontonavn' ) );
+
+	if ( $column_exists ) {
+		$wpdb->query( "ALTER TABLE {$table_bank_statements} DROP COLUMN `Kontonavn`" );
 	}
 }
 
@@ -2158,7 +2172,7 @@ function sr_render_bank_statements_page() {
 						continue;
 					}
 
-					if ( count( $row ) < 5 ) {
+					if ( count( $row ) < 4 ) {
 						continue;
 					}
 
@@ -2166,7 +2180,6 @@ function sr_render_bank_statements_page() {
 					$text           = trim( (string) $row[1] );
 					$amount         = sr_normalize_decimal_input( $row[2] );
 					$balance        = sr_normalize_decimal_input( $row[3] );
-					$account_name   = trim( (string) $row[4] );
 
 					$hash_source = implode(
 						'|',
@@ -2175,7 +2188,6 @@ function sr_render_bank_statements_page() {
 							$text,
 							(string) $amount,
 							(string) $balance,
-							$account_name,
 						)
 					);
 					$row_hash = hash( 'sha256', $hash_source );
@@ -2199,11 +2211,10 @@ function sr_render_bank_statements_page() {
 							'Tekst'       => $text,
 							'Beløb'       => $amount,
 							'Saldo'       => $balance,
-							'Kontonavn'   => $account_name,
 							'row_hash'    => $row_hash,
 							'created_at'  => sr_now(),
 						),
-						array( '%s', '%s', '%f', '%f', '%s', '%s', '%s' )
+						array( '%s', '%s', '%f', '%f', '%s', '%s' )
 					);
 
 					if ( false !== $inserted ) {
@@ -2243,7 +2254,7 @@ function sr_render_bank_statements_page() {
 					<th scope="row">CSV-fil</th>
 					<td>
 						<input type="file" name="sr_bank_csv" accept=".csv,text/csv" required>
-						<p class="description">CSV-format: Dato;Tekst;Beløb;Saldo;Kontonavn</p>
+						<p class="description">CSV-format: Dato;Tekst;Beløb;Saldo</p>
 					</td>
 				</tr>
 			</table>
@@ -2258,13 +2269,12 @@ function sr_render_bank_statements_page() {
 					<th>Tekst</th>
 					<th>Beløb</th>
 					<th>Saldo</th>
-					<th>Kontonavn</th>
 				</tr>
 			</thead>
 			<tbody>
 				<?php if ( empty( $rows ) ) : ?>
 					<tr>
-						<td colspan="5">Ingen banklinjer fundet.</td>
+						<td colspan="4">Ingen banklinjer fundet.</td>
 					</tr>
 				<?php else : ?>
 					<?php foreach ( $rows as $row ) : ?>
@@ -2273,7 +2283,6 @@ function sr_render_bank_statements_page() {
 							<td><?php echo esc_html( $row->Tekst ); ?></td>
 							<td><?php echo esc_html( number_format( (float) $row->Beløb, 2, ',', '.' ) ); ?></td>
 							<td><?php echo esc_html( number_format( (float) $row->Saldo, 2, ',', '.' ) ); ?></td>
-							<td><?php echo esc_html( $row->Kontonavn ); ?></td>
 						</tr>
 					<?php endforeach; ?>
 				<?php endif; ?>
