@@ -2771,10 +2771,10 @@ function sr_render_bank_statement_link_page() {
 		)
 	);
 
-	$residents = $wpdb->get_results( "SELECT id, name FROM {$table_residents} ORDER BY name ASC" );
-	$resident_names = array();
+	$residents = $wpdb->get_results( "SELECT id, member_number FROM {$table_residents} ORDER BY member_number ASC" );
+	$resident_member_numbers = array();
 	foreach ( $residents as $resident ) {
-		$resident_names[ (int) $resident->id ] = $resident->name;
+		$resident_member_numbers[ (int) $resident->id ] = $resident->member_number;
 	}
 	?>
 	<div class="wrap">
@@ -2796,7 +2796,7 @@ function sr_render_bank_statement_link_page() {
 					<th>Tekst</th>
 					<th>Beløb</th>
 					<th>Saldo</th>
-					<th>Beboer</th>
+					<th>dns</th>
 					<th>Handling</th>
 				</tr>
 			</thead>
@@ -2814,15 +2814,15 @@ function sr_render_bank_statement_link_page() {
 							<td><?php echo esc_html( number_format( (float) $row->Saldo, 2, ',', '.' ) ); ?></td>
 							<td>
 								<?php if ( $row->payment_id ) : ?>
-									<?php echo esc_html( $resident_names[ (int) $row->linked_resident_id ] ?? 'Ukendt' ); ?>
+									<?php echo esc_html( $resident_member_numbers[ (int) $row->linked_resident_id ] ?? 'Ukendt' ); ?>
 								<?php else : ?>
 									<form method="post">
 										<?php wp_nonce_field( 'sr_link_bank_payment_action', 'sr_link_bank_payment_nonce' ); ?>
 										<input type="hidden" name="bank_statement_id" value="<?php echo esc_attr( $row->id ); ?>">
 										<select name="resident_id" required>
-											<option value="">Vælg beboer</option>
+											<option value="">Vælg medlemsnummer</option>
 											<?php foreach ( $residents as $resident ) : ?>
-												<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->name ); ?></option>
+												<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->member_number ); ?></option>
 											<?php endforeach; ?>
 										</select>
 								<?php endif; ?>
