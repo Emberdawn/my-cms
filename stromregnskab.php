@@ -2125,6 +2125,7 @@ function sr_render_bank_statements_page() {
 	$per_page              = 20;
 	$current_page          = sr_get_paged_param( 'sr_page' );
 	$message               = '';
+	$popup_message         = '';
 
 	if ( isset( $_POST['sr_upload_bank_csv'] ) ) {
 		check_admin_referer( 'sr_upload_bank_csv_action', 'sr_upload_bank_csv_nonce' );
@@ -2137,6 +2138,7 @@ function sr_render_bank_statements_page() {
 		} else {
 			$added   = 0;
 			$skipped = 0;
+			$read_rows = 0;
 			$contents = file_get_contents( $file['tmp_name'] );
 
 			if ( false === $contents ) {
@@ -2176,6 +2178,7 @@ function sr_render_bank_statements_page() {
 						continue;
 					}
 
+					$read_rows++;
 					$date           = trim( (string) $row[0] );
 					$text           = trim( (string) $row[1] );
 					$amount         = sr_normalize_decimal_input( $row[2] );
@@ -2224,11 +2227,18 @@ function sr_render_bank_statements_page() {
 
 				$message = '<div class="notice notice-success"><p>' .
 					sprintf(
-						'Indlæsning fuldført. Tilføjede %d rækker, sprang %d rækker over (duplikater).',
+						'Indlæsning fuldført. Læste %d rækker, tilføjede %d rækker, sprang %d rækker over (duplikater).',
+						$read_rows,
 						$added,
 						$skipped
 					) .
 					'</p></div>';
+				$popup_message = sprintf(
+					'Indlæsning fuldført.\nLæste rækker: %d\nIndsatte rækker: %d\nSkippede rækker (duplikater): %d',
+					$read_rows,
+					$added,
+					$skipped
+				);
 			}
 		}
 	}
@@ -2253,6 +2263,13 @@ function sr_render_bank_statements_page() {
 	<div class="wrap">
 		<h1>Bankudtog</h1>
 		<?php echo wp_kses_post( $message ); ?>
+		<?php if ( '' !== $popup_message ) : ?>
+			<script>
+				(function() {
+					window.alert('<?php echo esc_js( $popup_message ); ?>');
+				}());
+			</script>
+		<?php endif; ?>
 		<form method="post" enctype="multipart/form-data">
 			<?php wp_nonce_field( 'sr_upload_bank_csv_action', 'sr_upload_bank_csv_nonce' ); ?>
 			<table class="form-table">
