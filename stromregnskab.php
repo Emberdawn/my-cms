@@ -940,21 +940,13 @@ function sr_get_resident_balance_status( $resident_id ) {
  */
 function sr_get_resident_total_cost( $resident_id ) {
 	$rows       = sr_get_resident_account_rows( $resident_id );
-	$total_cost = null;
-
 	foreach ( $rows as $row ) {
-		if ( null === $row['cost'] ) {
-			continue;
+		if ( null !== $row['total_cost'] ) {
+			return (float) $row['total_cost'];
 		}
-
-		if ( null === $total_cost ) {
-			$total_cost = 0.0;
-		}
-
-		$total_cost += (float) $row['cost'];
 	}
 
-	return $total_cost;
+	return null;
 }
 
 /**
