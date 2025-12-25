@@ -2804,7 +2804,7 @@ function sr_render_graphs_page() {
 	}
 
 	$month_labels = array( 'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec' );
-	$chart_data   = array_values( $monthly_data );
+	$chart_data   = array_values( $monthly_payments );
 	$balance_data = array_values( $monthly_balances );
 	$has_data     = array_sum( $chart_data ) > 0 || array_sum( array_map( 'abs', $balance_data ) ) > 0;
 	?>
@@ -2834,9 +2834,9 @@ function sr_render_graphs_page() {
 		<div class="sr-graph-panel">
 			<canvas id="sr-kwh-chart" width="960" height="360"></canvas>
 		</div>
-		<p class="description">Grafen viser beregnet kWh-forbrug samt betalingssaldoen pr. måned for den valgte beboer.</p>
+		<p class="description">Grafen viser samlet indbetalt samt saldo pr. måned for den valgte beboer.</p>
 		<?php if ( ! $has_data ) : ?>
-			<p>Der er endnu ingen verificerede indberetninger for det valgte år.</p>
+			<p>Der er endnu ingen verificerede indbetalinger for det valgte år.</p>
 		<?php endif; ?>
 	</div>
 	<style>
@@ -2889,7 +2889,8 @@ function sr_render_graphs_page() {
 			for (let i = 0; i <= yTicks; i++) {
 				const value = Math.round((maxValue / yTicks) * i);
 				const y = height - padding.bottom - (chartHeight / yTicks) * i;
-				ctx.fillText(value + ' kWh', 8, y + 4);
+				const label = value.toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kr.';
+				ctx.fillText(label, 8, y + 4);
 				ctx.strokeStyle = '#f0f0f1';
 				ctx.beginPath();
 				ctx.moveTo(padding.left, y);
@@ -2947,7 +2948,7 @@ function sr_render_graphs_page() {
 			ctx.fillStyle = '#2271b1';
 			ctx.fillRect(padding.left, padding.top - 18, 12, 12);
 			ctx.fillStyle = '#1d2327';
-			ctx.fillText('kWh', padding.left + 18, padding.top - 8);
+			ctx.fillText('Indbetalt (kr.)', padding.left + 18, padding.top - 8);
 			ctx.fillStyle = '#d63638';
 			ctx.fillRect(padding.left + 70, padding.top - 18, 12, 12);
 			ctx.fillStyle = '#1d2327';
