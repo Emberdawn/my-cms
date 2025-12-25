@@ -519,6 +519,100 @@ function sr_maybe_add_resident_text( $resident_id, $text ) {
 }
 
 /**
+ * Auto-create verified payments for unlinked bank statements with matching text.
+ *
+ * @param int    $resident_id Resident ID.
+ * @param string $text        Bank statement text.
+ * @param int    $actor_id    User ID to record as verifier.
+ * @return array{created:int,errors:string[]}
+ */
+function sr_auto_create_payments_for_text( $resident_id, $text, $actor_id = 0 ) {
+	global $wpdb;
+
+	$resident_id = absint( $resident_id );
+	if ( ! $resident_id ) {
+		return array(
+			'created' => 0,
+			'errors'  => array(),
+		);
+	}
+
+	$raw_text = trim( (string) $text );
+	$text     = sr_normalize_bank_text( $raw_text );
+	if ( '' === $text ) {
+		return array(
+			'created' => 0,
+			'errors'  => array(),
+		);
+	}
+
+	$actor_id = absint( $actor_id );
+	if ( ! $actor_id ) {
+		$actor_id = get_current_user_id();
+	}
+
+	$table_bank_statements = $wpdb->prefix . 'sr_bank_statements';
+	$table_payments        = $wpdb->prefix . 'sr_payments';
+
+	$text_options = array_values( array_unique( array_filter( array( $text, $raw_text ) ) ) );
+	$placeholders = implode( ',', array_fill( 0, count( $text_options ), '%s' ) );
+	$rows         = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT b.*
+				FROM {$table_bank_statements} b
+				LEFT JOIN {$table_payments} p ON b.id = p.bank_statement_id
+				WHERE p.id IS NULL AND b.`Tekst` IN ({$placeholders})",
+			...$text_options
+		)
+	);
+
+	$created = 0;
+	$errors  = array();
+
+	foreach ( $rows as $row ) {
+		$period = sr_get_period_from_bank_statement_date( $row->Dato ?? '' );
+		if ( ! $period ) {
+			$errors[] = 'Kunne ikke aflæse datoen fra bankudtoget: ' . ( $row->Tekst ?? '' );
+			continue;
+		}
+		if ( sr_is_period_locked( $period['month'], $period['year'] ) ) {
+			$errors[] = 'Perioden er låst og kan ikke bruges til auto-tilknytning: ' . ( $row->Tekst ?? '' );
+			continue;
+		}
+
+		$inserted = $wpdb->insert(
+			$table_payments,
+			array(
+				'resident_id'       => $resident_id,
+				'bank_statement_id' => (int) $row->id,
+				'period_month'      => $period['month'],
+				'period_year'       => $period['year'],
+				'amount'            => (float) ( $row->Beløb ?? 0 ),
+				'status'            => 'verified',
+				'submitted_by'      => $actor_id,
+				'submitted_at'      => sr_now(),
+				'verified_by'       => $actor_id,
+				'verified_at'       => sr_now(),
+			),
+			array( '%d', '%d', '%d', '%d', '%f', '%s', '%d', '%s', '%d', '%s' )
+		);
+
+		if ( false !== $inserted ) {
+			sr_log_action( 'create', 'payment', $wpdb->insert_id, 'Auto-tilknytning efter tekstmatch' );
+			sr_log_action( 'verify', 'payment', $wpdb->insert_id, 'Indbetaling verificeret (auto)' );
+			$created++;
+		} else {
+			$errors[] = 'Kunne ikke oprette auto-tilknyttet betaling: ' . ( $row->Tekst ?? '' );
+		}
+	}
+
+	return array(
+		'created' => $created,
+		'errors'  => $errors,
+	);
+}
+
+/**
  * Find residents by bank statement text.
  *
  * @param string $text Bank statement text.
@@ -1795,7 +1889,10 @@ function sr_render_payments_page() {
 					sr_log_action( 'unverify', 'payment', $payment_id, 'Indbetaling markeret som ikke verificeret' );
 				}
 				if ( $bank_statement_id ) {
-					sr_maybe_add_resident_text( $resident_id, sr_get_bank_statement_text( $bank_statement_id ) );
+					$text_added = sr_maybe_add_resident_text( $resident_id, sr_get_bank_statement_text( $bank_statement_id ) );
+					if ( $text_added ) {
+						sr_auto_create_payments_for_text( $resident_id, sr_get_bank_statement_text( $bank_statement_id ), get_current_user_id() );
+					}
 				}
 			}
 		} elseif ( $resident_id && $month && $year && ! $skip_payment_update && ! sr_is_period_locked( $month, $year ) ) {
@@ -1828,7 +1925,10 @@ function sr_render_payments_page() {
 				sr_notify_resident_verified( $resident_id, 'indbetaling' );
 			}
 			if ( $bank_statement_id ) {
-				sr_maybe_add_resident_text( $resident_id, sr_get_bank_statement_text( $bank_statement_id ) );
+				$text_added = sr_maybe_add_resident_text( $resident_id, sr_get_bank_statement_text( $bank_statement_id ) );
+				if ( $text_added ) {
+					sr_auto_create_payments_for_text( $resident_id, sr_get_bank_statement_text( $bank_statement_id ), get_current_user_id() );
+				}
 			}
 		}
 	}
@@ -1912,7 +2012,10 @@ function sr_render_payments_page() {
 						)
 					);
 					if ( $payment_resident_id ) {
-						sr_maybe_add_resident_text( $payment_resident_id, sr_get_bank_statement_text( $bank_statement_id ) );
+						$text_added = sr_maybe_add_resident_text( $payment_resident_id, sr_get_bank_statement_text( $bank_statement_id ) );
+						if ( $text_added ) {
+							sr_auto_create_payments_for_text( $payment_resident_id, sr_get_bank_statement_text( $bank_statement_id ), get_current_user_id() );
+						}
 					}
 				}
 				$message = '<div class="notice notice-success"><p>Bankudtogstilknytningen er opdateret.</p></div>';
@@ -3081,6 +3184,10 @@ function sr_render_bank_statement_link_page() {
 		} else {
 			$linked_count = 0;
 			$errors       = array();
+			$auto_results = array(
+				'created' => 0,
+				'errors'  => array(),
+			);
 
 			foreach ( $link_requests as $bank_statement_id => $resident_id ) {
 				$bank_statement = $wpdb->get_row(
@@ -3135,7 +3242,12 @@ function sr_render_bank_statement_link_page() {
 				if ( false !== $inserted ) {
 					sr_log_action( 'create', 'payment', $wpdb->insert_id, 'Bankudtog tilknytning' );
 					sr_log_action( 'verify', 'payment', $wpdb->insert_id, 'Indbetaling verificeret' );
-					sr_maybe_add_resident_text( $resident_id, $bank_statement->Tekst ?? '' );
+					$text_added = sr_maybe_add_resident_text( $resident_id, $bank_statement->Tekst ?? '' );
+					if ( $text_added ) {
+						$new_auto_results = sr_auto_create_payments_for_text( $resident_id, $bank_statement->Tekst ?? '', get_current_user_id() );
+						$auto_results['created'] += (int) $new_auto_results['created'];
+						$auto_results['errors']   = array_merge( $auto_results['errors'], $new_auto_results['errors'] );
+					}
 					$linked_count++;
 				} else {
 					$errors[] = 'Kunne ikke oprette en indbetaling. Prøv igen.';
@@ -3145,6 +3257,13 @@ function sr_render_bank_statement_link_page() {
 			$notices = array();
 			if ( $linked_count > 0 ) {
 				$notices[] = '<div class="notice notice-success"><p>' . esc_html( sprintf( '%d indbetalinger blev oprettet og tilknyttet.', $linked_count ) ) . '</p></div>';
+			}
+			if ( ! empty( $auto_results['created'] ) ) {
+				$notices[] = '<div class="notice notice-success"><p>' . esc_html( sprintf( '%d indbetalinger blev auto-tilknyttet baseret på ny tekst.', $auto_results['created'] ) ) . '</p></div>';
+			}
+			if ( ! empty( $auto_results['errors'] ) ) {
+				$auto_error_list = '<ul><li>' . implode( '</li><li>', array_map( 'esc_html', $auto_results['errors'] ) ) . '</li></ul>';
+				$notices[]       = '<div class="notice notice-error"><p>Auto-tilknytning gav fejl:</p>' . $auto_error_list . '</div>';
 			}
 			if ( ! empty( $errors ) ) {
 				$errors_list = '<ul><li>' . implode( '</li><li>', array_map( 'esc_html', $errors ) ) . '</li></ul>';
