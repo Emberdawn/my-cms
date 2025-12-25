@@ -2766,10 +2766,8 @@ function sr_render_graphs_page() {
 	}
 
 	$monthly_balances = array();
-	$running_balance = 0.0;
 	for ( $month_index = 1; $month_index <= 12; $month_index++ ) {
-		$running_balance += (float) $monthly_payments[ $month_index ] - (float) $monthly_costs[ $month_index ];
-		$monthly_balances[ $month_index ] = $running_balance;
+		$monthly_balances[ $month_index ] = (float) $monthly_payments[ $month_index ] - (float) $monthly_costs[ $month_index ];
 	}
 
 	$month_labels = array( 'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec' );
@@ -2803,7 +2801,7 @@ function sr_render_graphs_page() {
 		<div class="sr-graph-panel">
 			<canvas id="sr-kwh-chart" width="960" height="360"></canvas>
 		</div>
-		<p class="description">Grafen viser beregnet kWh-forbrug samt betalingssaldoen for den valgte beboer pr. måned.</p>
+		<p class="description">Grafen viser beregnet kWh-forbrug samt betalingssaldoen pr. måned for den valgte beboer.</p>
 		<?php if ( ! $has_data ) : ?>
 			<p>Der er endnu ingen verificerede indberetninger for det valgte år.</p>
 		<?php endif; ?>
@@ -2920,7 +2918,7 @@ function sr_render_graphs_page() {
 			ctx.fillStyle = '#d63638';
 			ctx.fillRect(padding.left + 70, padding.top - 18, 12, 12);
 			ctx.fillStyle = '#1d2327';
-			ctx.fillText('Saldo', padding.left + 88, padding.top - 8);
+			ctx.fillText('Saldo (kr.)', padding.left + 88, padding.top - 8);
 		})();
 	</script>
 	<?php
