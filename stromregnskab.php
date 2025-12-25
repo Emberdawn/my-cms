@@ -2679,24 +2679,38 @@ function sr_render_bank_statement_link_page() {
 
 	if ( isset( $_POST['sr_link_bank_payment'] ) ) {
 		check_admin_referer( 'sr_link_bank_payment_action', 'sr_link_bank_payment_nonce' );
-		$bank_statement_id = absint( $_POST['bank_statement_id'] ?? 0 );
-		$resident_id       = absint( $_POST['resident_id'] ?? 0 );
-		if ( ! $resident_id ) {
-			$resident_id = absint( $_POST['resident_id_name'] ?? 0 );
+		$resident_ids      = array_map( 'absint', $_POST['resident_id'] ?? array() );
+		$resident_name_ids = array_map( 'absint', $_POST['resident_id_name'] ?? array() );
+		$link_requests     = array();
+
+		foreach ( $resident_ids as $bank_statement_id => $resident_id ) {
+			$bank_statement_id = absint( $bank_statement_id );
+			if ( ! $resident_id ) {
+				$resident_id = absint( $resident_name_ids[ $bank_statement_id ] ?? 0 );
+			}
+			if ( $bank_statement_id && $resident_id ) {
+				$link_requests[ $bank_statement_id ] = $resident_id;
+			}
 		}
 
-		if ( ! $bank_statement_id || ! $resident_id ) {
-			$message = '<div class="notice notice-error"><p>Vælg både bankudtog og beboer.</p></div>';
+		if ( empty( $link_requests ) ) {
+			$message = '<div class="notice notice-error"><p>Vælg mindst én beboer for at tilknytte bankudtog.</p></div>';
 		} else {
-			$bank_statement = $wpdb->get_row(
-				$wpdb->prepare(
-					"SELECT * FROM {$table_bank_statements} WHERE id = %d",
-					$bank_statement_id
-				)
-			);
-			if ( ! $bank_statement ) {
-				$message = '<div class="notice notice-error"><p>Det valgte bankudtog findes ikke længere.</p></div>';
-			} else {
+			$linked_count = 0;
+			$errors       = array();
+
+			foreach ( $link_requests as $bank_statement_id => $resident_id ) {
+				$bank_statement = $wpdb->get_row(
+					$wpdb->prepare(
+						"SELECT * FROM {$table_bank_statements} WHERE id = %d",
+						$bank_statement_id
+					)
+				);
+				if ( ! $bank_statement ) {
+					$errors[] = 'Et valgt bankudtog findes ikke længere.';
+					continue;
+				}
+
 				$existing_payment = $wpdb->get_var(
 					$wpdb->prepare(
 						"SELECT id FROM {$table_payments} WHERE bank_statement_id = %d",
@@ -2704,41 +2718,55 @@ function sr_render_bank_statement_link_page() {
 					)
 				);
 				if ( $existing_payment ) {
-					$message = '<div class="notice notice-error"><p>Bankudtoget er allerede tilknyttet.</p></div>';
+					$errors[] = 'Et valgt bankudtog er allerede tilknyttet.';
+					continue;
+				}
+
+				$period = sr_get_period_from_bank_statement_date( $bank_statement->Dato );
+				if ( ! $period ) {
+					$errors[] = 'Kunne ikke aflæse datoen fra et bankudtog.';
+					continue;
+				}
+				if ( sr_is_period_locked( $period['month'], $period['year'] ) ) {
+					$errors[] = 'En valgt periode er låst og kan ikke bruges til indbetaling.';
+					continue;
+				}
+
+				$status   = 'verified';
+				$inserted = $wpdb->insert(
+					$table_payments,
+					array(
+						'resident_id'       => $resident_id,
+						'bank_statement_id' => $bank_statement_id,
+						'period_month'      => $period['month'],
+						'period_year'       => $period['year'],
+						'amount'            => (float) $bank_statement->Beløb,
+						'status'            => $status,
+						'submitted_by'      => get_current_user_id(),
+						'submitted_at'      => sr_now(),
+						'verified_by'       => get_current_user_id(),
+						'verified_at'       => sr_now(),
+					),
+					array( '%d', '%d', '%d', '%d', '%f', '%s', '%d', '%s', '%d', '%s' )
+				);
+				if ( false !== $inserted ) {
+					sr_log_action( 'create', 'payment', $wpdb->insert_id, 'Bankudtog tilknytning' );
+					sr_log_action( 'verify', 'payment', $wpdb->insert_id, 'Indbetaling verificeret' );
+					$linked_count++;
 				} else {
-					$period = sr_get_period_from_bank_statement_date( $bank_statement->Dato );
-					if ( ! $period ) {
-						$message = '<div class="notice notice-error"><p>Kunne ikke aflæse datoen fra bankudtoget.</p></div>';
-					} elseif ( sr_is_period_locked( $period['month'], $period['year'] ) ) {
-						$message = '<div class="notice notice-error"><p>Perioden er låst og kan ikke bruges til indbetaling.</p></div>';
-					} else {
-						$status = 'verified';
-						$inserted = $wpdb->insert(
-							$table_payments,
-							array(
-								'resident_id'       => $resident_id,
-								'bank_statement_id' => $bank_statement_id,
-								'period_month'      => $period['month'],
-								'period_year'       => $period['year'],
-								'amount'            => (float) $bank_statement->Beløb,
-								'status'            => $status,
-								'submitted_by'      => get_current_user_id(),
-								'submitted_at'      => sr_now(),
-								'verified_by'       => get_current_user_id(),
-								'verified_at'       => sr_now(),
-							),
-							array( '%d', '%d', '%d', '%d', '%f', '%s', '%d', '%s', '%d', '%s' )
-						);
-						if ( false !== $inserted ) {
-							sr_log_action( 'create', 'payment', $wpdb->insert_id, 'Bankudtog tilknytning' );
-							sr_log_action( 'verify', 'payment', $wpdb->insert_id, 'Indbetaling verificeret' );
-							$message = '<div class="notice notice-success"><p>Indbetalingen blev oprettet og tilknyttet bankudtoget.</p></div>';
-						} else {
-							$message = '<div class="notice notice-error"><p>Kunne ikke oprette indbetalingen. Prøv igen.</p></div>';
-						}
-					}
+					$errors[] = 'Kunne ikke oprette en indbetaling. Prøv igen.';
 				}
 			}
+
+			$notices = array();
+			if ( $linked_count > 0 ) {
+				$notices[] = '<div class="notice notice-success"><p>' . esc_html( sprintf( '%d indbetalinger blev oprettet og tilknyttet.', $linked_count ) ) . '</p></div>';
+			}
+			if ( ! empty( $errors ) ) {
+				$errors_list = '<ul><li>' . implode( '</li><li>', array_map( 'esc_html', $errors ) ) . '</li></ul>';
+				$notices[]   = '<div class="notice notice-error"><p>Der opstod problemer under tilknytning:</p>' . $errors_list . '</div>';
+			}
+			$message = implode( '', $notices );
 		}
 	}
 
@@ -2783,16 +2811,21 @@ function sr_render_bank_statement_link_page() {
 	<div class="wrap">
 		<h1>Tilknyt betalinger</h1>
 		<?php echo wp_kses_post( $message ); ?>
-		<form method="get" style="margin: 12px 0;">
-			<input type="hidden" name="page" value="<?php echo esc_attr( SR_PLUGIN_SLUG . '-bank-link-payments' ); ?>">
-			<input type="hidden" name="sr_hide_negative" value="0">
-			<label>
-				<input type="checkbox" name="sr_hide_negative" value="1" <?php checked( $hide_negative ); ?>>
-				Skjul negative posteringer
-			</label>
-			<button type="submit" class="button">Opdater</button>
-		</form>
-		<table class="widefat striped">
+		<div style="display: flex; align-items: center; gap: 8px; margin: 12px 0;">
+			<form method="get" style="margin: 0;">
+				<input type="hidden" name="page" value="<?php echo esc_attr( SR_PLUGIN_SLUG . '-bank-link-payments' ); ?>">
+				<input type="hidden" name="sr_hide_negative" value="0">
+				<label>
+					<input type="checkbox" name="sr_hide_negative" value="1" <?php checked( $hide_negative ); ?>>
+					Skjul negative posteringer
+				</label>
+				<button type="submit" class="button">Opdater</button>
+			</form>
+			<button type="submit" name="sr_link_bank_payment" class="button button-primary" form="sr-link-payments-form">Tilknyt</button>
+		</div>
+		<form method="post" id="sr-link-payments-form">
+			<?php wp_nonce_field( 'sr_link_bank_payment_action', 'sr_link_bank_payment_nonce' ); ?>
+			<table class="widefat striped">
 			<thead>
 				<tr>
 					<th>Dato</th>
@@ -2809,7 +2842,7 @@ function sr_render_bank_statement_link_page() {
 					</tr>
 				<?php else : ?>
 					<?php foreach ( $rows as $row ) : ?>
-						<tr>
+						<tr class="sr-link-payment-row">
 							<td><?php echo esc_html( $row->Dato ); ?></td>
 							<td><?php echo esc_html( $row->Tekst ); ?></td>
 							<td><?php echo esc_html( number_format( (float) $row->Beløb, 2, ',', '.' ) ); ?></td>
@@ -2817,36 +2850,33 @@ function sr_render_bank_statement_link_page() {
 								<?php if ( $row->payment_id ) : ?>
 									<?php echo esc_html( $resident_member_numbers[ (int) $row->linked_resident_id ] ?? 'Ukendt' ); ?>
 								<?php else : ?>
-									<form method="post" class="sr-link-payment-form">
-										<?php wp_nonce_field( 'sr_link_bank_payment_action', 'sr_link_bank_payment_nonce' ); ?>
-										<input type="hidden" name="bank_statement_id" value="<?php echo esc_attr( $row->id ); ?>">
-										<select name="resident_id" class="sr-link-payment-member" required>
-											<option value="">dns</option>
-											<?php foreach ( $residents as $resident ) : ?>
-												<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->member_number ); ?></option>
-											<?php endforeach; ?>
-										</select>
-										<select name="resident_id_name" class="sr-link-payment-name">
-											<option value="">Vælg navn</option>
-											<?php foreach ( $residents as $resident ) : ?>
-												<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->name ); ?></option>
-											<?php endforeach; ?>
-										</select>
+									<select name="resident_id[<?php echo esc_attr( $row->id ); ?>]" class="sr-link-payment-member">
+										<option value="">Vælg beboer</option>
+										<?php foreach ( $residents as $resident ) : ?>
+											<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->member_number ); ?></option>
+										<?php endforeach; ?>
+									</select>
+									<select name="resident_id_name[<?php echo esc_attr( $row->id ); ?>]" class="sr-link-payment-name">
+										<option value="">Vælg navn</option>
+										<?php foreach ( $residents as $resident ) : ?>
+											<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->name ); ?></option>
+										<?php endforeach; ?>
+									</select>
 								<?php endif; ?>
 							</td>
 							<td>
 								<?php if ( $row->payment_id ) : ?>
 									<span>Allerede tilknyttet</span>
 								<?php else : ?>
-									<button type="submit" name="sr_link_bank_payment" class="button button-primary">Tilknyt</button>
-									</form>
+									<span>Vælg beboer</span>
 								<?php endif; ?>
 							</td>
 						</tr>
 					<?php endforeach; ?>
 				<?php endif; ?>
 			</tbody>
-		</table>
+			</table>
+		</form>
 		<?php
 		$pagination_base = add_query_arg(
 			'sr_hide_negative',
@@ -2857,9 +2887,9 @@ function sr_render_bank_statement_link_page() {
 		?>
 	</div>
 	<script>
-		document.querySelectorAll('.sr-link-payment-form').forEach((form) => {
-			const memberSelect = form.querySelector('.sr-link-payment-member');
-			const nameSelect = form.querySelector('.sr-link-payment-name');
+		document.querySelectorAll('.sr-link-payment-row').forEach((row) => {
+			const memberSelect = row.querySelector('.sr-link-payment-member');
+			const nameSelect = row.querySelector('.sr-link-payment-name');
 
 			if (!memberSelect || !nameSelect) {
 				return;
