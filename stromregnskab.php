@@ -3352,14 +3352,13 @@ function sr_render_bank_statement_link_page() {
 					<th>Dato</th>
 					<th>Tekst</th>
 					<th>Beløb</th>
-					<th>dns</th>
-					<th>Handling</th>
+					<th>Medlem</th>
 				</tr>
 			</thead>
 			<tbody>
 				<?php if ( empty( $rows ) ) : ?>
 					<tr>
-						<td colspan="5">Ingen banklinjer fundet.</td>
+						<td colspan="4">Ingen banklinjer fundet.</td>
 					</tr>
 				<?php else : ?>
 					<?php foreach ( $rows as $row ) : ?>
@@ -3383,13 +3382,6 @@ function sr_render_bank_statement_link_page() {
 											<option value="<?php echo esc_attr( $resident->id ); ?>"><?php echo esc_html( $resident->name ); ?></option>
 										<?php endforeach; ?>
 									</select>
-								<?php endif; ?>
-							</td>
-							<td>
-								<?php if ( $row->payment_id ) : ?>
-									<span>Allerede tilknyttet</span>
-								<?php else : ?>
-									<span>Vælg beboer</span>
 								<?php endif; ?>
 							</td>
 						</tr>
