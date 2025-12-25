@@ -881,6 +881,7 @@ function sr_get_resident_account_rows( $resident_id ) {
 					'cost'         => $cost,
 					'total_cost'   => null,
 					'payments'     => 0.0,
+					'total_payments' => 0.0,
 					'balance'      => null,
 				);
 			}
@@ -889,10 +890,13 @@ function sr_get_resident_account_rows( $resident_id ) {
 
 	$running_balance = 0.0;
 	$running_cost    = null;
+	$running_payments = 0.0;
 	foreach ( $rows as $index => $row ) {
 		$key                        = $row['period_year'] . '-' . $row['period_month'];
 		$payments_total             = $payments_by_period[ $key ] ?? 0.0;
 		$rows[ $index ]['payments'] = $payments_total;
+		$running_payments          += $payments_total;
+		$rows[ $index ]['total_payments'] = $running_payments;
 
 		if ( null === $row['cost'] ) {
 			continue;
@@ -2630,6 +2634,7 @@ function sr_render_resident_account_page() {
 							<th>Beløb</th>
 							<th>Totalt forbrug</th>
 							<th>Indbetalinger</th>
+							<th>Totalt indbetalt</th>
 							<th>Saldo status</th>
 						</tr>
 					</thead>
@@ -2676,6 +2681,9 @@ function sr_render_resident_account_page() {
 								$payments_class = $row['payments'] < 0 ? 'sr-negative' : 'sr-positive';
 								?>
 								<td class="<?php echo esc_attr( $payments_class ); ?>"><?php echo esc_html( number_format( (float) $row['payments'], 2, ',', '.' ) ); ?> kr.</td>
+								<td class="<?php echo esc_attr( $payments_class ); ?>">
+									<?php echo esc_html( number_format( (float) $row['total_payments'], 2, ',', '.' ) ); ?> kr.
+								</td>
 								<?php
 								$balance_class = '';
 								if ( null !== $row['balance'] ) {
