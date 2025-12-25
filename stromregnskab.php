@@ -2940,14 +2940,24 @@ function sr_render_graphs_page() {
 			ctx.textBaseline = 'alphabetic';
 
 			ctx.lineWidth = 0;
+			const legendY = padding.top - 8;
+			const legendGap = 16;
+			const legendBoxSize = 12;
+			const legendBoxOffset = legendBoxSize + 6;
+			const totalPaidLabel = 'Total indbetalt (kr.)';
+			const balanceLabel = 'Saldo (kr.)';
+
 			ctx.fillStyle = '#2271b1';
-			ctx.fillRect(padding.left, padding.top - 18, 12, 12);
+			ctx.fillRect(padding.left, padding.top - 18, legendBoxSize, legendBoxSize);
 			ctx.fillStyle = '#1d2327';
-			ctx.fillText('Total indbetalt (kr.)', padding.left + 18, padding.top - 8);
+			ctx.fillText(totalPaidLabel, padding.left + legendBoxOffset, legendY);
+
+			const totalPaidWidth = ctx.measureText(totalPaidLabel).width;
+			const balanceStart = padding.left + legendBoxOffset + totalPaidWidth + legendGap;
 			ctx.fillStyle = '#d63638';
-			ctx.fillRect(padding.left + 70, padding.top - 18, 12, 12);
+			ctx.fillRect(balanceStart, padding.top - 18, legendBoxSize, legendBoxSize);
 			ctx.fillStyle = '#1d2327';
-			ctx.fillText('Saldo (kr.)', padding.left + 88, padding.top - 8);
+			ctx.fillText(balanceLabel, balanceStart + legendBoxOffset, legendY);
 		})();
 	</script>
 	<?php
