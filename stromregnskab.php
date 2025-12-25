@@ -2747,7 +2747,7 @@ function sr_render_resident_account_page() {
  *
  * @param int $resident_id Resident ID.
  * @param int $selected_year Selected year.
- * @return array{year_options:array,selected_year:int,balance_data:array,total_cost_data:array,total_payments_data:array,has_data:bool}
+ * @return array{year_options:array,selected_year:int,balance_data:array,total_cost_data:array,total_payments_data:array,has_data:bool,account_rows:array}
  */
 function sr_get_resident_graph_context( $resident_id, $selected_year = 0 ) {
 	global $wpdb;
@@ -2772,6 +2772,8 @@ function sr_get_resident_graph_context( $resident_id, $selected_year = 0 ) {
 	}
 
 	$account_rows = sr_get_resident_account_rows( $resident_id );
+	$account_rows           = sr_get_resident_account_rows( $resident_id );
+	$year_rows              = array();
 	$monthly_balances       = array_fill( 1, 12, 0.0 );
 	$monthly_total_cost     = array_fill( 1, 12, 0.0 );
 	$monthly_total_payments = array_fill( 1, 12, 0.0 );
@@ -2779,6 +2781,7 @@ function sr_get_resident_graph_context( $resident_id, $selected_year = 0 ) {
 		if ( (int) $account_row['period_year'] !== $selected_year ) {
 			continue;
 		}
+		$year_rows[] = $account_row;
 		$month_index = (int) $account_row['period_month'];
 		if ( $month_index < 1 || $month_index > 12 ) {
 			continue;
@@ -2808,6 +2811,7 @@ function sr_get_resident_graph_context( $resident_id, $selected_year = 0 ) {
 		'total_cost_data'    => $total_cost_data,
 		'total_payments_data'=> $total_payments_data,
 		'has_data'           => $has_data,
+		'account_rows'       => $year_rows,
 	);
 }
 
@@ -4386,6 +4390,88 @@ function sr_resident_graphs_shortcode() {
 			</select>
 			<button type="submit">Vis graf</button>
 		</form>
+		<h3>Regnskab for <?php echo esc_html( $graph_context['selected_year'] ); ?></h3>
+		<?php if ( empty( $graph_context['account_rows'] ) ) : ?>
+			<p>Der er ingen regnskabsdata for det valgte år.</p>
+		<?php else : ?>
+			<table>
+				<thead>
+					<tr>
+						<th>Periode</th>
+						<th>Inberettet målerstand</th>
+						<th>Forbrug (kWh)</th>
+						<th>Pris pr. kWh</th>
+						<th>Beløb</th>
+						<th>Totalt forbrug</th>
+						<th>Indbetalinger</th>
+						<th>Totalt indbetalt</th>
+						<th>Saldo status</th>
+					</tr>
+				</thead>
+				<tbody>
+					<?php foreach ( $graph_context['account_rows'] as $row ) : ?>
+						<tr>
+							<td><?php echo esc_html( $row['period_month'] . '/' . $row['period_year'] ); ?></td>
+							<td>
+								<?php
+								if ( null !== $row['reported_reading'] ) {
+									echo esc_html( number_format( (float) $row['reported_reading'], 3, ',', '.' ) );
+								}
+								?>
+							</td>
+							<td><?php echo esc_html( number_format( (float) $row['consumption'], 3, ',', '.' ) ); ?></td>
+							<td>
+								<?php if ( null === $row['price'] ) : ?>
+									Ikke angivet
+								<?php else : ?>
+									<?php echo esc_html( number_format( (float) $row['price'], 4, ',', '.' ) ); ?>
+								<?php endif; ?>
+							</td>
+							<?php
+							$cost_class = '';
+							if ( null !== $row['cost'] ) {
+								$cost_class = $row['cost'] < 0 ? 'sr-negative' : 'sr-positive';
+							}
+							?>
+							<td class="<?php echo esc_attr( $cost_class ); ?>">
+								<?php if ( null === $row['cost'] ) : ?>
+									Ikke beregnet
+								<?php else : ?>
+									<?php echo esc_html( number_format( (float) $row['cost'], 2, ',', '.' ) ); ?> kr.
+								<?php endif; ?>
+							</td>
+							<td class="<?php echo esc_attr( $cost_class ); ?>">
+								<?php if ( null === $row['total_cost'] ) : ?>
+									Ikke beregnet
+								<?php else : ?>
+									<?php echo esc_html( number_format( (float) $row['total_cost'], 2, ',', '.' ) ); ?> kr.
+								<?php endif; ?>
+							</td>
+							<?php
+							$payments_class = $row['payments'] < 0 ? 'sr-negative' : 'sr-positive';
+							?>
+							<td class="<?php echo esc_attr( $payments_class ); ?>"><?php echo esc_html( number_format( (float) $row['payments'], 2, ',', '.' ) ); ?> kr.</td>
+							<td class="<?php echo esc_attr( $payments_class ); ?>">
+								<?php echo esc_html( number_format( (float) $row['total_payments'], 2, ',', '.' ) ); ?> kr.
+							</td>
+							<?php
+							$balance_class = '';
+							if ( null !== $row['balance'] ) {
+								$balance_class = $row['balance'] < 0 ? 'sr-negative' : 'sr-positive';
+							}
+							?>
+							<td class="<?php echo esc_attr( $balance_class ); ?>">
+								<?php if ( null === $row['balance'] ) : ?>
+									Ikke beregnet
+								<?php else : ?>
+									<?php echo esc_html( number_format( (float) $row['balance'], 2, ',', '.' ) ); ?> kr.
+								<?php endif; ?>
+							</td>
+						</tr>
+					<?php endforeach; ?>
+				</tbody>
+			</table>
+		<?php endif; ?>
 
 		<div class="sr-graph-panel">
 			<canvas id="sr-kwh-chart-resident" width="960" height="360"></canvas>
