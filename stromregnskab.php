@@ -2886,7 +2886,7 @@ function sr_render_bank_statement_link_page() {
 		?>
 	</div>
 	<script>
-		const hideNegativeToggle = document.querySelector('input[name="sr_hide_negative"]');
+		const hideNegativeToggle = document.querySelector('input[type="checkbox"][name="sr_hide_negative"]');
 		if (hideNegativeToggle && hideNegativeToggle.form) {
 			hideNegativeToggle.addEventListener('change', () => {
 				hideNegativeToggle.form.submit();
