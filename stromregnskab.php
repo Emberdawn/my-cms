@@ -170,8 +170,41 @@ function sr_activate_plugin() {
 			SR_CAPABILITY_RESIDENT => true,
 		)
 	);
+
+	sr_maybe_create_resident_graphs_page();
 }
 register_activation_hook( __FILE__, 'sr_activate_plugin' );
+
+/**
+ * Create resident graphs page on activation if it does not exist.
+ */
+function sr_maybe_create_resident_graphs_page() {
+	$page_id = (int) get_option( 'sr_resident_graphs_page_id', 0 );
+	if ( $page_id && get_post( $page_id ) ) {
+		return;
+	}
+
+	$existing = get_page_by_path( 'beboer-grafer' );
+	if ( $existing instanceof WP_Post ) {
+		update_option( 'sr_resident_graphs_page_id', (int) $existing->ID );
+		return;
+	}
+
+	$new_page_id = wp_insert_post(
+		array(
+			'post_title'   => 'Beboer grafer',
+			'post_status'  => 'publish',
+			'post_type'    => 'page',
+			'post_name'    => 'beboer-grafer',
+			'post_content' => '[strom_regnskab_grafer]',
+		),
+		true
+	);
+
+	if ( ! is_wp_error( $new_page_id ) ) {
+		update_option( 'sr_resident_graphs_page_id', (int) $new_page_id );
+	}
+}
 
 /**
  * Ensure resident-linked tables cascade on delete.
@@ -2710,38 +2743,22 @@ function sr_render_resident_account_page() {
 }
 
 /**
- * Render graphs page.
+ * Build graph data for a resident.
+ *
+ * @param int $resident_id Resident ID.
+ * @param int $selected_year Selected year.
+ * @return array{year_options:array,selected_year:int,balance_data:array,total_cost_data:array,total_payments_data:array,has_data:bool}
  */
-function sr_render_graphs_page() {
-	if ( ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
-		return;
-	}
-
+function sr_get_resident_graph_context( $resident_id, $selected_year = 0 ) {
 	global $wpdb;
-	$table_residents = $wpdb->prefix . 'sr_residents';
-	$table_readings  = $wpdb->prefix . 'sr_meter_readings';
+	$table_readings = $wpdb->prefix . 'sr_meter_readings';
 
-	$residents = $wpdb->get_results( "SELECT id, name, member_number FROM {$table_residents} ORDER BY name ASC" );
-	if ( empty( $residents ) ) {
-		?>
-		<div class="wrap">
-			<h1>Grafer</h1>
-			<p>Der er ingen beboere endnu.</p>
-		</div>
-		<?php
-		return;
-	}
-
-	$selected_resident_id = isset( $_GET['resident_id'] ) ? absint( $_GET['resident_id'] ) : (int) $residents[0]->id;
-	$resident_ids         = array_map( 'absint', wp_list_pluck( $residents, 'id' ) );
-	if ( ! in_array( $selected_resident_id, $resident_ids, true ) ) {
-		$selected_resident_id = (int) $residents[0]->id;
-	}
+	$resident_id = absint( $resident_id );
 
 	$available_years = $wpdb->get_col(
 		$wpdb->prepare(
 			"SELECT DISTINCT period_year FROM {$table_readings} WHERE resident_id = %d ORDER BY period_year DESC",
-			$selected_resident_id
+			$resident_id
 		)
 	);
 
@@ -2750,14 +2767,13 @@ function sr_render_graphs_page() {
 	$year_options = array_map( 'absint', array_unique( array_merge( $available_years, $year_range ) ) );
 	rsort( $year_options );
 
-	$selected_year = isset( $_GET['year'] ) ? absint( $_GET['year'] ) : 0;
 	if ( ! in_array( $selected_year, $year_options, true ) ) {
 		$selected_year = ! empty( $year_options ) ? (int) $year_options[0] : $current_year;
 	}
 
-	$account_rows = sr_get_resident_account_rows( $selected_resident_id );
-	$monthly_balances = array_fill( 1, 12, 0.0 );
-	$monthly_total_cost = array_fill( 1, 12, 0.0 );
+	$account_rows = sr_get_resident_account_rows( $resident_id );
+	$monthly_balances       = array_fill( 1, 12, 0.0 );
+	$monthly_total_cost     = array_fill( 1, 12, 0.0 );
 	$monthly_total_payments = array_fill( 1, 12, 0.0 );
 	foreach ( $account_rows as $account_row ) {
 		if ( (int) $account_row['period_year'] !== $selected_year ) {
@@ -2778,62 +2794,43 @@ function sr_render_graphs_page() {
 		}
 	}
 
-	$month_labels = array( 'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec' );
-	$balance_data = array_values( $monthly_balances );
-	$total_cost_data = array_values( $monthly_total_cost );
+	$balance_data        = array_values( $monthly_balances );
+	$total_cost_data     = array_values( $monthly_total_cost );
 	$total_payments_data = array_values( $monthly_total_payments );
-	$has_balance_data = array_sum( array_map( 'abs', $balance_data ) ) > 0;
-	$has_totals_data  = array_sum( $total_cost_data ) > 0 || array_sum( $total_payments_data ) > 0;
-	$has_data     = $has_balance_data || $has_totals_data;
-	?>
-	<div class="wrap">
-		<h1>Grafer</h1>
-		<form method="get" class="sr-graph-form">
-			<input type="hidden" name="page" value="<?php echo esc_attr( SR_PLUGIN_SLUG . '-graphs' ); ?>">
-			<label for="sr-resident-select">Beboer</label>
-			<select id="sr-resident-select" name="resident_id">
-				<?php foreach ( $residents as $resident ) : ?>
-					<option value="<?php echo esc_attr( $resident->id ); ?>" <?php selected( $selected_resident_id, $resident->id ); ?>>
-						<?php echo esc_html( $resident->name . ' (' . $resident->member_number . ')' ); ?>
-					</option>
-				<?php endforeach; ?>
-			</select>
-			<label for="sr-year-select">År</label>
-			<select id="sr-year-select" name="year">
-				<?php foreach ( $year_options as $year_option ) : ?>
-					<option value="<?php echo esc_attr( $year_option ); ?>" <?php selected( $selected_year, $year_option ); ?>>
-						<?php echo esc_html( $year_option ); ?>
-					</option>
-				<?php endforeach; ?>
-			</select>
-			<?php submit_button( 'Vis graf', 'secondary', '', false ); ?>
-		</form>
+	$has_balance_data    = array_sum( array_map( 'abs', $balance_data ) ) > 0;
+	$has_totals_data     = array_sum( $total_cost_data ) > 0 || array_sum( $total_payments_data ) > 0;
+	$has_data            = $has_balance_data || $has_totals_data;
 
-		<div class="sr-graph-panel">
-			<canvas id="sr-kwh-chart" width="960" height="360"></canvas>
-		</div>
-		<p class="description">Grafen viser saldo pr. måned for den valgte beboer.</p>
-		<div class="sr-graph-panel">
-			<canvas id="sr-total-chart" width="960" height="360"></canvas>
-		</div>
-		<p class="description">Grafen viser totalt forbrug (kr.) og totalt indbetalt (kr.) pr. måned for den valgte beboer.</p>
-		<?php if ( ! $has_data ) : ?>
-			<p>Der er endnu ingen verificerede indbetalinger for det valgte år.</p>
-		<?php endif; ?>
-	</div>
-	<style>
-		.sr-graph-form{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:16px 0}
-		.sr-graph-form label{font-weight:600}
-		.sr-graph-panel{background:#fff;border:1px solid #dcdcde;border-radius:6px;padding:16px;max-width:980px}
-		.sr-graph-panel + .sr-graph-panel{margin-top:16px}
-	</style>
+	return array(
+		'year_options'       => $year_options,
+		'selected_year'      => $selected_year,
+		'balance_data'       => $balance_data,
+		'total_cost_data'    => $total_cost_data,
+		'total_payments_data'=> $total_payments_data,
+		'has_data'           => $has_data,
+	);
+}
+
+/**
+ * Render graph scripts.
+ *
+ * @param string $form_selector Form selector.
+ * @param string $balance_canvas Canvas ID.
+ * @param string $total_canvas Canvas ID.
+ * @param array  $balance_data Balance values.
+ * @param array  $total_cost_data Total cost values.
+ * @param array  $total_payments_data Total payments values.
+ * @param array  $month_labels Month labels.
+ */
+function sr_render_graphs_script( $form_selector, $balance_canvas, $total_canvas, $balance_data, $total_cost_data, $total_payments_data, $month_labels ) {
+	?>
 	<script>
 		(function() {
 			const balanceData = <?php echo wp_json_encode( $balance_data ); ?>;
 			const totalCostData = <?php echo wp_json_encode( $total_cost_data ); ?>;
 			const totalPaymentsData = <?php echo wp_json_encode( $total_payments_data ); ?>;
 			const labels = <?php echo wp_json_encode( $month_labels ); ?>;
-			const form = document.querySelector('.sr-graph-form');
+			const form = document.querySelector('<?php echo esc_js( $form_selector ); ?>');
 			if (form) {
 				form.querySelectorAll('select').forEach((select) => {
 					select.addEventListener('change', () => form.submit());
@@ -2971,7 +2968,7 @@ function sr_render_graphs_page() {
 			};
 
 			renderLineChart({
-				canvasId: 'sr-kwh-chart',
+				canvasId: '<?php echo esc_js( $balance_canvas ); ?>',
 				series: [
 					{ data: balanceData, color: '#d63638' },
 				],
@@ -2982,7 +2979,7 @@ function sr_render_graphs_page() {
 			});
 
 			renderLineChart({
-				canvasId: 'sr-total-chart',
+				canvasId: '<?php echo esc_js( $total_canvas ); ?>',
 				series: [
 					{ data: totalCostData, color: '#00a32a' },
 					{ data: totalPaymentsData, color: '#2271b1' },
@@ -2995,6 +2992,97 @@ function sr_render_graphs_page() {
 			});
 		})();
 	</script>
+	<?php
+}
+
+/**
+ * Render graphs page.
+ */
+function sr_render_graphs_page() {
+	if ( ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
+		return;
+	}
+
+	global $wpdb;
+	$table_residents = $wpdb->prefix . 'sr_residents';
+
+	$residents = $wpdb->get_results( "SELECT id, name, member_number FROM {$table_residents} ORDER BY name ASC" );
+	if ( empty( $residents ) ) {
+		?>
+		<div class="wrap">
+			<h1>Grafer</h1>
+			<p>Der er ingen beboere endnu.</p>
+		</div>
+		<?php
+		return;
+	}
+
+	$selected_resident_id = isset( $_GET['resident_id'] ) ? absint( $_GET['resident_id'] ) : (int) $residents[0]->id;
+	$resident_ids         = array_map( 'absint', wp_list_pluck( $residents, 'id' ) );
+	if ( ! in_array( $selected_resident_id, $resident_ids, true ) ) {
+		$selected_resident_id = (int) $residents[0]->id;
+	}
+
+	$selected_year = isset( $_GET['year'] ) ? absint( $_GET['year'] ) : 0;
+	$graph_context = sr_get_resident_graph_context( $selected_resident_id, $selected_year );
+	$month_labels = array( 'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec' );
+	$balance_data = $graph_context['balance_data'];
+	$total_cost_data = $graph_context['total_cost_data'];
+	$total_payments_data = $graph_context['total_payments_data'];
+	$has_data     = $graph_context['has_data'];
+	?>
+	<div class="wrap">
+		<h1>Grafer</h1>
+		<form method="get" class="sr-graph-form">
+			<input type="hidden" name="page" value="<?php echo esc_attr( SR_PLUGIN_SLUG . '-graphs' ); ?>">
+			<label for="sr-resident-select">Beboer</label>
+			<select id="sr-resident-select" name="resident_id">
+				<?php foreach ( $residents as $resident ) : ?>
+					<option value="<?php echo esc_attr( $resident->id ); ?>" <?php selected( $selected_resident_id, $resident->id ); ?>>
+						<?php echo esc_html( $resident->name . ' (' . $resident->member_number . ')' ); ?>
+					</option>
+				<?php endforeach; ?>
+			</select>
+			<label for="sr-year-select">År</label>
+			<select id="sr-year-select" name="year">
+				<?php foreach ( $graph_context['year_options'] as $year_option ) : ?>
+					<option value="<?php echo esc_attr( $year_option ); ?>" <?php selected( $graph_context['selected_year'], $year_option ); ?>>
+						<?php echo esc_html( $year_option ); ?>
+					</option>
+				<?php endforeach; ?>
+			</select>
+			<?php submit_button( 'Vis graf', 'secondary', '', false ); ?>
+		</form>
+
+		<div class="sr-graph-panel">
+			<canvas id="sr-kwh-chart" width="960" height="360"></canvas>
+		</div>
+		<p class="description">Grafen viser saldo pr. måned for den valgte beboer.</p>
+		<div class="sr-graph-panel">
+			<canvas id="sr-total-chart" width="960" height="360"></canvas>
+		</div>
+		<p class="description">Grafen viser totalt forbrug (kr.) og totalt indbetalt (kr.) pr. måned for den valgte beboer.</p>
+		<?php if ( ! $has_data ) : ?>
+			<p>Der er endnu ingen verificerede indbetalinger for det valgte år.</p>
+		<?php endif; ?>
+	</div>
+	<style>
+		.sr-graph-form{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:16px 0}
+		.sr-graph-form label{font-weight:600}
+		.sr-graph-panel{background:#fff;border:1px solid #dcdcde;border-radius:6px;padding:16px;max-width:980px}
+		.sr-graph-panel + .sr-graph-panel{margin-top:16px}
+	</style>
+	<?php
+	sr_render_graphs_script(
+		'.sr-graph-form',
+		'sr-kwh-chart',
+		'sr-total-chart',
+		$balance_data,
+		$total_cost_data,
+		$total_payments_data,
+		$month_labels
+	);
+	?>
 	<?php
 }
 
@@ -4076,15 +4164,21 @@ function sr_resident_dashboard_shortcode() {
 					'period_month'=> $month,
 					'period_year' => $year,
 					'reading_kwh' => $reading,
-					'status'      => 'pending',
+					'status'      => 'verified',
 					'submitted_by'=> $current_user_id,
 					'submitted_at'=> sr_now(),
+					'verified_by' => $current_user_id,
+					'verified_at' => sr_now(),
 				),
-				array( '%d', '%d', '%d', '%f', '%s', '%d', '%s' )
+				array( '%d', '%d', '%d', '%f', '%s', '%d', '%s', '%d', '%s' )
 			);
-			sr_log_action( 'submit', 'reading', $wpdb->insert_id, 'Beboer indberetning' );
+			$reading_id = (int) $wpdb->insert_id;
+			if ( $reading_id ) {
+				sr_generate_summary_for_reading( $resident->id, $month, $year );
+			}
+			sr_log_action( 'submit', 'reading', $reading_id, 'Beboer indberetning' );
 			sr_notify_admin_submission( 'målerstand', $resident->id );
-			$message = '<p>Tak! Din målerstand er modtaget.</p>';
+			$message = '<p>Tak! Din målerstand er registreret.</p>';
 		}
 	}
 
@@ -4204,6 +4298,83 @@ function sr_resident_dashboard_shortcode() {
 	return ob_get_clean();
 }
 add_shortcode( 'strom_regnskab_dashboard', 'sr_resident_dashboard_shortcode' );
+
+/**
+ * Shortcode for resident graphs.
+ *
+ * @return string
+ */
+function sr_resident_graphs_shortcode() {
+	if ( ! is_user_logged_in() ) {
+		return '<p>Log ind for at se dine grafer.</p>';
+	}
+
+	if ( ! current_user_can( SR_CAPABILITY_RESIDENT ) && ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
+		return '<p>Du har ikke adgang til dette område.</p>';
+	}
+
+	global $wpdb;
+	$table_residents = $wpdb->prefix . 'sr_residents';
+	$current_user_id = get_current_user_id();
+	$resident        = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table_residents} WHERE wp_user_id = %d", $current_user_id ) );
+
+	if ( ! $resident ) {
+		return '<p>Ingen beboerdata knyttet til din bruger.</p>';
+	}
+
+	$selected_year = isset( $_GET['sr_graph_year'] ) ? absint( $_GET['sr_graph_year'] ) : 0;
+	$graph_context = sr_get_resident_graph_context( $resident->id, $selected_year );
+	$month_labels  = array( 'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec' );
+
+	ob_start();
+	?>
+	<div class="sr-dashboard sr-graph-dashboard">
+		<h2>Dine grafer</h2>
+		<form method="get" class="sr-graph-form sr-graph-form--resident">
+			<label for="sr-year-select-resident">År</label>
+			<select id="sr-year-select-resident" name="sr_graph_year">
+				<?php foreach ( $graph_context['year_options'] as $year_option ) : ?>
+					<option value="<?php echo esc_attr( $year_option ); ?>" <?php selected( $graph_context['selected_year'], $year_option ); ?>>
+						<?php echo esc_html( $year_option ); ?>
+					</option>
+				<?php endforeach; ?>
+			</select>
+			<button type="submit">Vis graf</button>
+		</form>
+
+		<div class="sr-graph-panel">
+			<canvas id="sr-kwh-chart-resident" width="960" height="360"></canvas>
+		</div>
+		<p class="description">Grafen viser saldo pr. måned for dig.</p>
+		<div class="sr-graph-panel">
+			<canvas id="sr-total-chart-resident" width="960" height="360"></canvas>
+		</div>
+		<p class="description">Grafen viser totalt forbrug (kr.) og totalt indbetalt (kr.) pr. måned.</p>
+		<?php if ( ! $graph_context['has_data'] ) : ?>
+			<p>Der er endnu ingen verificerede indbetalinger for det valgte år.</p>
+		<?php endif; ?>
+	</div>
+	<style>
+		.sr-graph-dashboard .sr-graph-form{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:16px 0}
+		.sr-graph-dashboard .sr-graph-form label{font-weight:600}
+		.sr-graph-dashboard .sr-graph-panel{background:#fff;border:1px solid #dcdcde;border-radius:6px;padding:16px;max-width:980px}
+		.sr-graph-dashboard .sr-graph-panel + .sr-graph-panel{margin-top:16px}
+	</style>
+	<?php
+	sr_render_graphs_script(
+		'.sr-graph-form--resident',
+		'sr-kwh-chart-resident',
+		'sr-total-chart-resident',
+		$graph_context['balance_data'],
+		$graph_context['total_cost_data'],
+		$graph_context['total_payments_data'],
+		$month_labels
+	);
+	?>
+	<?php
+	return ob_get_clean();
+}
+add_shortcode( 'strom_regnskab_grafer', 'sr_resident_graphs_shortcode' );
 
 /**
  * Enqueue frontend styles for negative values.
