@@ -2474,9 +2474,9 @@ function sr_render_balances_page() {
 				<tr>
 					<th>Beboer navn</th>
 					<th>Medlemsnummer</th>
-					<th>Totalt indbetalt</th>
 					<th>Total kilowatt</th>
-					<th>Forbrug</th>
+					<th>Totalt forbrug</th>
+					<th>Totalt indbetalt</th>
 					<th>Saldo status</th>
 				</tr>
 			</thead>
@@ -2493,7 +2493,6 @@ function sr_render_balances_page() {
 					<tr>
 						<td><?php echo esc_html( $balance->name ); ?></td>
 						<td><?php echo esc_html( $balance->member_number ); ?></td>
-						<td><?php echo esc_html( number_format_i18n( (float) $balance->total_paid, 2 ) ); ?></td>
 					<td><?php echo esc_html( number_format_i18n( (float) $balance->total_kwh, 3 ) ); ?></td>
 					<td>
 						<?php if ( null === $total_cost ) : ?>
@@ -2502,6 +2501,7 @@ function sr_render_balances_page() {
 							<?php echo esc_html( number_format_i18n( (float) $total_cost, 2 ) ); ?> kr.
 						<?php endif; ?>
 					</td>
+						<td><?php echo esc_html( number_format_i18n( (float) $balance->total_paid, 2 ) ); ?></td>
 						<td class="<?php echo esc_attr( $balance_class ); ?>">
 							<?php if ( null === $balance_status ) : ?>
 								Ikke beregnet
