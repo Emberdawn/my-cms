@@ -921,6 +921,31 @@ function sr_get_resident_balance_status( $resident_id ) {
 }
 
 /**
+ * Get total cost for a resident based on monthly prices.
+ *
+ * @param int $resident_id Resident ID.
+ * @return float|null
+ */
+function sr_get_resident_total_cost( $resident_id ) {
+	$rows       = sr_get_resident_account_rows( $resident_id );
+	$total_cost = null;
+
+	foreach ( $rows as $row ) {
+		if ( null === $row['cost'] ) {
+			continue;
+		}
+
+		if ( null === $total_cost ) {
+			$total_cost = 0.0;
+		}
+
+		$total_cost += (float) $row['cost'];
+	}
+
+	return $total_cost;
+}
+
+/**
  * Insert audit log.
  *
  * @param string $action Action.
@@ -2397,7 +2422,6 @@ function sr_render_balances_page() {
 	global $wpdb;
 	$table_residents = $wpdb->prefix . 'sr_residents';
 	$table_payments  = $wpdb->prefix . 'sr_payments';
-	$table_summary   = $wpdb->prefix . 'sr_monthly_summary';
 	$per_page        = 20;
 	$current_page    = sr_get_paged_param( 'sr_page' );
 	$total_items     = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_residents}" );
@@ -2410,7 +2434,6 @@ function sr_render_balances_page() {
 				r.name,
 				r.member_number,
 				COALESCE(pay.total_paid, 0) AS total_paid,
-				costs.total_cost,
 				COALESCE(
 					(
 						SELECT reading_kwh
@@ -2434,11 +2457,6 @@ function sr_render_balances_page() {
 				WHERE status = %s
 				GROUP BY resident_id
 			) pay ON r.id = pay.resident_id
-			LEFT JOIN (
-				SELECT resident_id, SUM(cost) AS total_cost
-				FROM {$table_summary}
-				GROUP BY resident_id
-			) costs ON r.id = costs.resident_id
 			ORDER BY r.name ASC
 			LIMIT %d OFFSET %d",
 			'verified',
@@ -2462,27 +2480,28 @@ function sr_render_balances_page() {
 					<th>Saldo status</th>
 				</tr>
 			</thead>
-			<tbody>
-				<?php foreach ( $balances as $balance ) : ?>
-					<?php
-					$balance_status = sr_get_resident_balance_status( $balance->id );
-					$balance_class  = '';
-					if ( null !== $balance_status ) {
-						$balance_class = $balance_status < 0 ? 'sr-negative' : 'sr-positive';
-					}
-					?>
+	<tbody>
+		<?php foreach ( $balances as $balance ) : ?>
+			<?php
+			$balance_status = sr_get_resident_balance_status( $balance->id );
+			$balance_class  = '';
+			$total_cost     = sr_get_resident_total_cost( $balance->id );
+			if ( null !== $balance_status ) {
+				$balance_class = $balance_status < 0 ? 'sr-negative' : 'sr-positive';
+			}
+			?>
 					<tr>
 						<td><?php echo esc_html( $balance->name ); ?></td>
 						<td><?php echo esc_html( $balance->member_number ); ?></td>
 						<td><?php echo esc_html( number_format_i18n( (float) $balance->total_paid, 2 ) ); ?></td>
-						<td><?php echo esc_html( number_format_i18n( (float) $balance->total_kwh, 3 ) ); ?></td>
-						<td>
-							<?php if ( null === $balance->total_cost ) : ?>
-								Ikke beregnet
-							<?php else : ?>
-								<?php echo esc_html( number_format_i18n( (float) $balance->total_cost, 2 ) ); ?> kr.
-							<?php endif; ?>
-						</td>
+					<td><?php echo esc_html( number_format_i18n( (float) $balance->total_kwh, 3 ) ); ?></td>
+					<td>
+						<?php if ( null === $total_cost ) : ?>
+							Ikke beregnet
+						<?php else : ?>
+							<?php echo esc_html( number_format_i18n( (float) $total_cost, 2 ) ); ?> kr.
+						<?php endif; ?>
+					</td>
 						<td class="<?php echo esc_attr( $balance_class ); ?>">
 							<?php if ( null === $balance_status ) : ?>
 								Ikke beregnet
