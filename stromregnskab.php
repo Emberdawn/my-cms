@@ -317,6 +317,7 @@ function sr_register_admin_menu() {
 	add_submenu_page( SR_PLUGIN_SLUG, 'Indbetalinger', 'Indbetalinger', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-payments', 'sr_render_payments_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Beboer saldo', 'Beboer saldo', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-balances', 'sr_render_balances_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Beboer regnskab', 'Beboer regnskab', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-resident-account', 'sr_render_resident_account_page' );
+	add_submenu_page( SR_PLUGIN_SLUG, 'Grafer', 'Grafer', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-graphs', 'sr_render_graphs_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Kontotekst', 'Kontotekst', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-account-text', 'sr_render_account_text_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Strømpriser', 'Strømpriser', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-prices', 'sr_render_prices_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Periodelåsning', 'Periodelåsning', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-locks', 'sr_render_locks_page' );
@@ -2656,6 +2657,174 @@ function sr_render_resident_account_page() {
 			<?php endif; ?>
 		<?php endif; ?>
 	</div>
+	<?php
+}
+
+/**
+ * Render graphs page.
+ */
+function sr_render_graphs_page() {
+	if ( ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
+		return;
+	}
+
+	global $wpdb;
+	$table_residents = $wpdb->prefix . 'sr_residents';
+	$table_readings  = $wpdb->prefix . 'sr_meter_readings';
+
+	$residents = $wpdb->get_results( "SELECT id, name, member_number FROM {$table_residents} ORDER BY name ASC" );
+	if ( empty( $residents ) ) {
+		?>
+		<div class="wrap">
+			<h1>Grafer</h1>
+			<p>Der er ingen beboere endnu.</p>
+		</div>
+		<?php
+		return;
+	}
+
+	$selected_resident_id = isset( $_GET['resident_id'] ) ? absint( $_GET['resident_id'] ) : (int) $residents[0]->id;
+	$resident_ids         = wp_list_pluck( $residents, 'id' );
+	if ( ! in_array( $selected_resident_id, $resident_ids, true ) ) {
+		$selected_resident_id = (int) $residents[0]->id;
+	}
+
+	$available_years = $wpdb->get_col(
+		$wpdb->prepare(
+			"SELECT DISTINCT period_year FROM {$table_readings} WHERE resident_id = %d ORDER BY period_year DESC",
+			$selected_resident_id
+		)
+	);
+
+	$current_year = (int) current_time( 'Y' );
+	$year_range   = range( $current_year, $current_year - 4 );
+	$year_options = array_unique( array_merge( $available_years, $year_range ) );
+	rsort( $year_options );
+
+	$selected_year = isset( $_GET['year'] ) ? absint( $_GET['year'] ) : 0;
+	if ( ! in_array( $selected_year, $year_options, true ) ) {
+		$selected_year = ! empty( $year_options ) ? (int) $year_options[0] : $current_year;
+	}
+
+	$rows = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT period_month, SUM(reading_kwh) AS total_kwh
+			 FROM {$table_readings}
+			 WHERE resident_id = %d AND period_year = %d AND status = 'verified'
+			 GROUP BY period_month",
+			$selected_resident_id,
+			$selected_year
+		)
+	);
+
+	$monthly_data = array_fill( 1, 12, 0.0 );
+	foreach ( $rows as $row ) {
+		$month_index = (int) $row->period_month;
+		if ( $month_index >= 1 && $month_index <= 12 ) {
+			$monthly_data[ $month_index ] = (float) $row->total_kwh;
+		}
+	}
+
+	$month_labels = array( 'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec' );
+	$chart_data   = array_values( $monthly_data );
+	$has_data     = array_sum( $chart_data ) > 0;
+	?>
+	<div class="wrap">
+		<h1>Grafer</h1>
+		<form method="get" class="sr-graph-form">
+			<input type="hidden" name="page" value="<?php echo esc_attr( SR_PLUGIN_SLUG . '-graphs' ); ?>">
+			<label for="sr-resident-select">Beboer</label>
+			<select id="sr-resident-select" name="resident_id">
+				<?php foreach ( $residents as $resident ) : ?>
+					<option value="<?php echo esc_attr( $resident->id ); ?>" <?php selected( $selected_resident_id, $resident->id ); ?>>
+						<?php echo esc_html( $resident->name . ' (' . $resident->member_number . ')' ); ?>
+					</option>
+				<?php endforeach; ?>
+			</select>
+			<label for="sr-year-select">År</label>
+			<select id="sr-year-select" name="year">
+				<?php foreach ( $year_options as $year_option ) : ?>
+					<option value="<?php echo esc_attr( $year_option ); ?>" <?php selected( $selected_year, $year_option ); ?>>
+						<?php echo esc_html( $year_option ); ?>
+					</option>
+				<?php endforeach; ?>
+			</select>
+			<?php submit_button( 'Vis graf', 'secondary', '', false ); ?>
+		</form>
+
+		<div class="sr-graph-panel">
+			<canvas id="sr-kwh-chart" width="960" height="360"></canvas>
+		</div>
+		<p class="description">Grafen viser verificerede kWh-indberetninger for den valgte beboer pr. måned.</p>
+		<?php if ( ! $has_data ) : ?>
+			<p>Der er endnu ingen verificerede indberetninger for det valgte år.</p>
+		<?php endif; ?>
+	</div>
+	<style>
+		.sr-graph-form{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:16px 0}
+		.sr-graph-form label{font-weight:600}
+		.sr-graph-panel{background:#fff;border:1px solid #dcdcde;border-radius:6px;padding:16px;max-width:980px}
+	</style>
+	<script>
+		(function() {
+			const data = <?php echo wp_json_encode( $chart_data ); ?>;
+			const labels = <?php echo wp_json_encode( $month_labels ); ?>;
+			const canvas = document.getElementById('sr-kwh-chart');
+			if (!canvas || !canvas.getContext) {
+				return;
+			}
+
+			const form = document.querySelector('.sr-graph-form');
+			if (form) {
+				form.querySelectorAll('select').forEach((select) => {
+					select.addEventListener('change', () => form.submit());
+				});
+			}
+
+			const ctx = canvas.getContext('2d');
+			const width = canvas.width;
+			const height = canvas.height;
+			ctx.clearRect(0, 0, width, height);
+
+			const padding = { top: 30, right: 30, bottom: 40, left: 60 };
+			const chartWidth = width - padding.left - padding.right;
+			const chartHeight = height - padding.top - padding.bottom;
+			const maxValue = Math.max(1, ...data);
+
+			ctx.strokeStyle = '#ccd0d4';
+			ctx.lineWidth = 1;
+			ctx.beginPath();
+			ctx.moveTo(padding.left, padding.top);
+			ctx.lineTo(padding.left, height - padding.bottom);
+			ctx.lineTo(width - padding.right, height - padding.bottom);
+			ctx.stroke();
+
+			ctx.fillStyle = '#1d2327';
+			ctx.font = '12px Arial, sans-serif';
+			const yTicks = 5;
+			for (let i = 0; i <= yTicks; i++) {
+				const value = Math.round((maxValue / yTicks) * i);
+				const y = height - padding.bottom - (chartHeight / yTicks) * i;
+				ctx.fillText(value + ' kWh', 8, y + 4);
+				ctx.strokeStyle = '#f0f0f1';
+				ctx.beginPath();
+				ctx.moveTo(padding.left, y);
+				ctx.lineTo(width - padding.right, y);
+				ctx.stroke();
+			}
+
+			const barWidth = chartWidth / labels.length - 8;
+			data.forEach((value, index) => {
+				const barHeight = (value / maxValue) * chartHeight;
+				const x = padding.left + index * (chartWidth / labels.length) + 4;
+				const y = height - padding.bottom - barHeight;
+				ctx.fillStyle = '#2271b1';
+				ctx.fillRect(x, y, barWidth, barHeight);
+				ctx.fillStyle = '#1d2327';
+				ctx.fillText(labels[index], x, height - padding.bottom + 18);
+			});
+		})();
+	</script>
 	<?php
 }
 
