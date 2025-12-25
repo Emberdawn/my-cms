@@ -394,6 +394,29 @@ function sr_get_days_in_month( $month, $year ) {
 }
 
 /**
+ * Delete resident data across related tables.
+ *
+ * @param int $resident_id Resident ID.
+ * @return bool
+ */
+function sr_delete_resident_and_related( $resident_id ) {
+	global $wpdb;
+
+	$resident_id = absint( $resident_id );
+	if ( ! $resident_id ) {
+		return false;
+	}
+
+	$wpdb->delete( $wpdb->prefix . 'sr_meter_readings', array( 'resident_id' => $resident_id ), array( '%d' ) );
+	$wpdb->delete( $wpdb->prefix . 'sr_payments', array( 'resident_id' => $resident_id ), array( '%d' ) );
+	$wpdb->delete( $wpdb->prefix . 'sr_monthly_summary', array( 'resident_id' => $resident_id ), array( '%d' ) );
+	$wpdb->delete( $wpdb->prefix . 'sr_resident_texts', array( 'resident_id' => $resident_id ), array( '%d' ) );
+	$wpdb->delete( $wpdb->prefix . 'sr_residents', array( 'id' => $resident_id ), array( '%d' ) );
+
+	return true;
+}
+
+/**
  * Parse bank statement date to period.
  *
  * @param string $date Bank statement date.
@@ -1200,11 +1223,7 @@ function sr_render_residents_page() {
 		check_admin_referer( 'sr_delete_resident_action', 'sr_delete_resident_nonce' );
 		$resident_id = absint( $_POST['resident_id'] ?? 0 );
 		if ( $resident_id ) {
-			$wpdb->delete( $wpdb->prefix . 'sr_meter_readings', array( 'resident_id' => $resident_id ), array( '%d' ) );
-			$wpdb->delete( $wpdb->prefix . 'sr_payments', array( 'resident_id' => $resident_id ), array( '%d' ) );
-			$wpdb->delete( $wpdb->prefix . 'sr_monthly_summary', array( 'resident_id' => $resident_id ), array( '%d' ) );
-			$wpdb->delete( $wpdb->prefix . 'sr_resident_texts', array( 'resident_id' => $resident_id ), array( '%d' ) );
-			$wpdb->delete( $table_residents, array( 'id' => $resident_id ), array( '%d' ) );
+			sr_delete_resident_and_related( $resident_id );
 			sr_log_action( 'delete', 'resident', $resident_id, 'Beboer slettet' );
 		}
 	}
