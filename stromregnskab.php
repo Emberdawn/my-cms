@@ -4130,10 +4130,6 @@ function sr_resident_dashboard_shortcode() {
 		return '<p>Log ind for at se dine data.</p>';
 	}
 
-	if ( ! current_user_can( SR_CAPABILITY_RESIDENT ) && ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
-		return '<p>Du har ikke adgang til dette område.</p>';
-	}
-
 	global $wpdb;
 	$table_residents = $wpdb->prefix . 'sr_residents';
 	$table_readings  = $wpdb->prefix . 'sr_meter_readings';
@@ -4144,6 +4140,10 @@ function sr_resident_dashboard_shortcode() {
 
 	$current_user_id = get_current_user_id();
 	$resident        = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table_residents} WHERE wp_user_id = %d", $current_user_id ) );
+
+	if ( ! current_user_can( SR_CAPABILITY_RESIDENT ) && ! current_user_can( SR_CAPABILITY_ADMIN ) && ! $resident ) {
+		return '<p>Du har ikke adgang til dette område.</p>';
+	}
 
 	if ( ! $resident ) {
 		return '<p>Ingen beboerdata knyttet til din bruger.</p>';
@@ -4309,17 +4309,53 @@ function sr_resident_graphs_shortcode() {
 		return '<p>Log ind for at se dine grafer.</p>';
 	}
 
-	if ( ! current_user_can( SR_CAPABILITY_RESIDENT ) && ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
-		return '<p>Du har ikke adgang til dette område.</p>';
-	}
-
 	global $wpdb;
 	$table_residents = $wpdb->prefix . 'sr_residents';
+	$table_readings  = $wpdb->prefix . 'sr_meter_readings';
+	$current_month   = (int) current_time( 'n' );
+	$current_year    = (int) current_time( 'Y' );
 	$current_user_id = get_current_user_id();
 	$resident        = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$table_residents} WHERE wp_user_id = %d", $current_user_id ) );
 
+	if ( ! current_user_can( SR_CAPABILITY_RESIDENT ) && ! current_user_can( SR_CAPABILITY_ADMIN ) && ! $resident ) {
+		return '<p>Du har ikke adgang til dette område.</p>';
+	}
+
 	if ( ! $resident ) {
 		return '<p>Ingen beboerdata knyttet til din bruger.</p>';
+	}
+
+	$message = '';
+	if ( isset( $_POST['sr_submit_reading'] ) ) {
+		check_admin_referer( 'sr_submit_reading_action', 'sr_submit_reading_nonce' );
+		$month   = absint( $_POST['period_month'] ?? 0 );
+		$year    = absint( $_POST['period_year'] ?? 0 );
+		$reading = (float) ( $_POST['reading_kwh'] ?? 0 );
+
+		if ( $month && $year && ! sr_is_period_locked( $month, $year ) ) {
+			$wpdb->insert(
+				$table_readings,
+				array(
+					'resident_id' => $resident->id,
+					'period_month'=> $month,
+					'period_year' => $year,
+					'reading_kwh' => $reading,
+					'status'      => 'verified',
+					'submitted_by'=> $current_user_id,
+					'submitted_at'=> sr_now(),
+					'verified_by' => $current_user_id,
+					'verified_at' => sr_now(),
+				),
+				array( '%d', '%d', '%d', '%f', '%s', '%d', '%s', '%d', '%s' )
+			);
+			$reading_id = (int) $wpdb->insert_id;
+			if ( $reading_id ) {
+				sr_generate_summary_for_reading( $resident->id, $month, $year );
+			}
+			sr_log_action( 'submit', 'reading', $reading_id, 'Beboer indberetning' );
+			sr_notify_admin_submission( 'målerstand', $resident->id );
+			$message = '<p>Tak! Din målerstand er registreret.</p>';
+		}
 	}
 
 	$selected_year = isset( $_GET['sr_graph_year'] ) ? absint( $_GET['sr_graph_year'] ) : 0;
@@ -4330,6 +4366,15 @@ function sr_resident_graphs_shortcode() {
 	?>
 	<div class="sr-dashboard sr-graph-dashboard">
 		<h2>Dine grafer</h2>
+		<?php echo wp_kses_post( $message ); ?>
+		<h3>Indberet målerstand</h3>
+		<form method="post" class="sr-graph-form sr-graph-form--reading">
+			<?php wp_nonce_field( 'sr_submit_reading_action', 'sr_submit_reading_nonce' ); ?>
+			<input type="number" name="period_month" min="1" max="12" required placeholder="Måned" value="<?php echo esc_attr( $current_month ); ?>">
+			<input type="number" name="period_year" min="2000" max="2100" required placeholder="År" value="<?php echo esc_attr( $current_year ); ?>">
+			<input type="number" name="reading_kwh" step="0.001" required placeholder="kWh">
+			<button type="submit" name="sr_submit_reading">Send</button>
+		</form>
 		<form method="get" class="sr-graph-form sr-graph-form--resident">
 			<label for="sr-year-select-resident">År</label>
 			<select id="sr-year-select-resident" name="sr_graph_year">
