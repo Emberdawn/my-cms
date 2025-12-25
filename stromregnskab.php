@@ -849,6 +849,8 @@ function sr_get_resident_account_rows( $resident_id ) {
 				$rows[] = array(
 					'period_month' => $period['month'],
 					'period_year'  => $period['year'],
+					'reading_from' => (float) $previous->reading_kwh,
+					'reading_to'   => (float) $current->reading_kwh,
 					'consumption'  => $period_consumption,
 					'price'        => $price,
 					'cost'         => $cost,
@@ -2552,6 +2554,7 @@ function sr_render_resident_account_page() {
 					<thead>
 						<tr>
 							<th>Periode</th>
+							<th>Målerstande</th>
 							<th>Forbrug (kWh)</th>
 							<th>Pris pr. kWh</th>
 							<th>Beløb</th>
@@ -2563,6 +2566,15 @@ function sr_render_resident_account_page() {
 						<?php foreach ( $paged_rows as $row ) : ?>
 							<tr>
 								<td><?php echo esc_html( $row['period_month'] . '/' . $row['period_year'] ); ?></td>
+								<td>
+									<?php
+									echo esc_html(
+										number_format( (float) $row['reading_from'], 3, ',', '.' )
+										. ' → '
+										. number_format( (float) $row['reading_to'], 3, ',', '.' )
+									);
+									?>
+								</td>
 								<td><?php echo esc_html( number_format( (float) $row['consumption'], 3, ',', '.' ) ); ?></td>
 								<td>
 									<?php if ( null === $row['price'] ) : ?>
