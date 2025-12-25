@@ -34,6 +34,7 @@ function sr_activate_plugin() {
 	$table_logs      = $wpdb->prefix . 'sr_audit_logs';
 	$table_summary   = $wpdb->prefix . 'sr_monthly_summary';
 	$table_bank_statements = $wpdb->prefix . 'sr_bank_statements';
+	$table_resident_texts  = $wpdb->prefix . 'sr_resident_texts';
 
 	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
@@ -142,12 +143,24 @@ function sr_activate_plugin() {
 		PRIMARY KEY  (id),
 		UNIQUE KEY row_hash (row_hash),
 		KEY created_at (created_at)
+	) {$charset_collate};
+
+	CREATE TABLE {$table_resident_texts} (
+		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+		resident_id bigint(20) unsigned NOT NULL,
+		text_value varchar(255) NOT NULL,
+		created_at datetime NOT NULL,
+		PRIMARY KEY  (id),
+		UNIQUE KEY resident_text (resident_id, text_value),
+		KEY resident_id (resident_id),
+		KEY text_value (text_value)
 	) {$charset_collate};";
 
 	dbDelta( $sql );
 	sr_add_foreign_keys();
 	sr_add_payment_bank_statement_column();
 	sr_remove_bank_statement_account_name_column();
+	sr_add_resident_texts_table();
 
 	add_role(
 		'resident',
@@ -171,6 +184,7 @@ function sr_add_foreign_keys() {
 	$table_readings  = $wpdb->prefix . 'sr_meter_readings';
 	$table_payments  = $wpdb->prefix . 'sr_payments';
 	$table_summary   = $wpdb->prefix . 'sr_monthly_summary';
+	$table_resident_texts = $wpdb->prefix . 'sr_resident_texts';
 
 	$foreign_keys = array(
 		array(
@@ -187,6 +201,11 @@ function sr_add_foreign_keys() {
 			'table'      => $table_summary,
 			'column'     => 'resident_id',
 			'constraint' => 'sr_summary_resident_fk',
+		),
+		array(
+			'table'      => $table_resident_texts,
+			'column'     => 'resident_id',
+			'constraint' => 'sr_resident_texts_resident_fk',
 		),
 	);
 
@@ -249,6 +268,38 @@ function sr_add_payment_bank_statement_column() {
 add_action( 'admin_init', 'sr_add_payment_bank_statement_column' );
 
 /**
+ * Ensure resident texts table exists.
+ */
+function sr_add_resident_texts_table() {
+	global $wpdb;
+
+	$table_resident_texts = $wpdb->prefix . 'sr_resident_texts';
+	$table_exists         = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table_resident_texts ) );
+
+	if ( $table_exists ) {
+		return;
+	}
+
+	$charset_collate = $wpdb->get_charset_collate();
+	$sql             = "CREATE TABLE {$table_resident_texts} (
+		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+		resident_id bigint(20) unsigned NOT NULL,
+		text_value varchar(255) NOT NULL,
+		created_at datetime NOT NULL,
+		PRIMARY KEY  (id),
+		UNIQUE KEY resident_text (resident_id, text_value),
+		KEY resident_id (resident_id),
+		KEY text_value (text_value)
+	) {$charset_collate};";
+
+	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+	dbDelta( $sql );
+	sr_add_foreign_keys();
+}
+
+add_action( 'admin_init', 'sr_add_resident_texts_table' );
+
+/**
  * Add plugin menu items.
  */
 function sr_register_admin_menu() {
@@ -266,6 +317,7 @@ function sr_register_admin_menu() {
 	add_submenu_page( SR_PLUGIN_SLUG, 'Indbetalinger', 'Indbetalinger', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-payments', 'sr_render_payments_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Beboer saldo', 'Beboer saldo', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-balances', 'sr_render_balances_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Beboer regnskab', 'Beboer regnskab', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-resident-account', 'sr_render_resident_account_page' );
+	add_submenu_page( SR_PLUGIN_SLUG, 'Kontotekst', 'Kontotekst', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-account-text', 'sr_render_account_text_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Strømpriser', 'Strømpriser', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-prices', 'sr_render_prices_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Periodelåsning', 'Periodelåsning', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-locks', 'sr_render_locks_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'CSV-eksport', 'CSV-eksport', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-export', 'sr_render_export_page' );
@@ -402,6 +454,123 @@ function sr_get_bank_statement_label( $row ) {
 	}
 
 	return sprintf( '%s - %s (%s kr.)', $date, $text, $amount_label );
+}
+
+/**
+ * Normalize bank statement text.
+ *
+ * @param string $text Raw text.
+ * @return string
+ */
+function sr_normalize_bank_text( $text ) {
+	$text = trim( (string) $text );
+	if ( '' === $text ) {
+		return '';
+	}
+
+	$text = preg_replace( '/\s+/', ' ', $text );
+	return trim( (string) $text );
+}
+
+/**
+ * Ensure bank text is stored for a resident.
+ *
+ * @param int    $resident_id Resident ID.
+ * @param string $text        Bank statement text.
+ * @return bool
+ */
+function sr_maybe_add_resident_text( $resident_id, $text ) {
+	global $wpdb;
+
+	$resident_id = absint( $resident_id );
+	if ( ! $resident_id ) {
+		return false;
+	}
+
+	$text = sr_normalize_bank_text( $text );
+	if ( '' === $text ) {
+		return false;
+	}
+
+	$table_resident_texts = $wpdb->prefix . 'sr_resident_texts';
+	$existing             = $wpdb->get_var(
+		$wpdb->prepare(
+			"SELECT id FROM {$table_resident_texts} WHERE resident_id = %d AND text_value = %s",
+			$resident_id,
+			$text
+		)
+	);
+
+	if ( $existing ) {
+		return false;
+	}
+
+	$inserted = $wpdb->insert(
+		$table_resident_texts,
+		array(
+			'resident_id' => $resident_id,
+			'text_value'  => $text,
+			'created_at'  => sr_now(),
+		),
+		array( '%d', '%s', '%s' )
+	);
+
+	return false !== $inserted;
+}
+
+/**
+ * Find residents by bank statement text.
+ *
+ * @param string $text Bank statement text.
+ * @return int[]
+ */
+function sr_get_resident_ids_by_text( $text ) {
+	global $wpdb;
+
+	$text = sr_normalize_bank_text( $text );
+	if ( '' === $text ) {
+		return array();
+	}
+
+	$table_resident_texts = $wpdb->prefix . 'sr_resident_texts';
+	$rows                 = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT resident_id FROM {$table_resident_texts} WHERE text_value = %s",
+			$text
+		)
+	);
+
+	$resident_ids = array();
+	foreach ( $rows as $row ) {
+		$resident_ids[] = (int) $row->resident_id;
+	}
+
+	return array_values( array_unique( $resident_ids ) );
+}
+
+/**
+ * Get bank statement text by ID.
+ *
+ * @param int $bank_statement_id Bank statement ID.
+ * @return string
+ */
+function sr_get_bank_statement_text( $bank_statement_id ) {
+	global $wpdb;
+
+	$bank_statement_id = absint( $bank_statement_id );
+	if ( ! $bank_statement_id ) {
+		return '';
+	}
+
+	$table_bank_statements = $wpdb->prefix . 'sr_bank_statements';
+	$text                  = $wpdb->get_var(
+		$wpdb->prepare(
+			"SELECT `Tekst` FROM {$table_bank_statements} WHERE id = %d",
+			$bank_statement_id
+		)
+	);
+
+	return is_string( $text ) ? $text : '';
 }
 
 /**
@@ -940,6 +1109,7 @@ function sr_render_residents_page() {
 			$wpdb->delete( $wpdb->prefix . 'sr_meter_readings', array( 'resident_id' => $resident_id ), array( '%d' ) );
 			$wpdb->delete( $wpdb->prefix . 'sr_payments', array( 'resident_id' => $resident_id ), array( '%d' ) );
 			$wpdb->delete( $wpdb->prefix . 'sr_monthly_summary', array( 'resident_id' => $resident_id ), array( '%d' ) );
+			$wpdb->delete( $wpdb->prefix . 'sr_resident_texts', array( 'resident_id' => $resident_id ), array( '%d' ) );
 			$wpdb->delete( $table_residents, array( 'id' => $resident_id ), array( '%d' ) );
 			sr_log_action( 'delete', 'resident', $resident_id, 'Beboer slettet' );
 		}
@@ -1090,6 +1260,120 @@ function sr_render_residents_page() {
 			});
 		}());
 	</script>
+	<?php
+}
+
+/**
+ * Render account text page.
+ */
+function sr_render_account_text_page() {
+	if ( ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
+		return;
+	}
+
+	global $wpdb;
+	$table_residents      = $wpdb->prefix . 'sr_residents';
+	$table_resident_texts = $wpdb->prefix . 'sr_resident_texts';
+	$message              = '';
+	$selected_resident_id = 0;
+	$selected_member      = '';
+
+	if ( isset( $_POST['sr_delete_account_text'] ) ) {
+		check_admin_referer( 'sr_delete_account_text_action', 'sr_delete_account_text_nonce' );
+		$text_id = absint( $_POST['text_id'] ?? 0 );
+		if ( $text_id ) {
+			$wpdb->delete( $table_resident_texts, array( 'id' => $text_id ), array( '%d' ) );
+			$message = '<div class="notice notice-success"><p>Kontotekst blev slettet.</p></div>';
+		}
+	}
+
+	$selected_member = sanitize_text_field( wp_unslash( $_GET['member_number'] ?? '' ) );
+	$selected_resident_id = absint( $_GET['resident_id'] ?? 0 );
+
+	if ( '' !== $selected_member ) {
+		$selected_resident_id = (int) $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT id FROM {$table_residents} WHERE member_number = %s",
+				$selected_member
+			)
+		);
+		if ( ! $selected_resident_id ) {
+			$message = '<div class="notice notice-error"><p>Ingen beboer fundet med det angivne DNS-nummer.</p></div>';
+		}
+	}
+
+	$residents = $wpdb->get_results( "SELECT id, member_number, name FROM {$table_residents} ORDER BY member_number ASC" );
+	$texts     = array();
+	if ( $selected_resident_id ) {
+		$texts = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM {$table_resident_texts} WHERE resident_id = %d ORDER BY text_value ASC",
+				$selected_resident_id
+			)
+		);
+	}
+	?>
+	<div class="wrap">
+		<h1>Kontotekst</h1>
+		<?php echo wp_kses_post( $message ); ?>
+		<form method="get" style="display:flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;">
+			<input type="hidden" name="page" value="<?php echo esc_attr( SR_PLUGIN_SLUG . '-account-text' ); ?>">
+			<div>
+				<label for="sr_account_text_resident">Beboer</label><br>
+				<select name="resident_id" id="sr_account_text_resident">
+					<option value="">Vælg beboer</option>
+					<?php foreach ( $residents as $resident ) : ?>
+						<option value="<?php echo esc_attr( $resident->id ); ?>" <?php selected( (int) $selected_resident_id, (int) $resident->id ); ?>>
+							<?php echo esc_html( $resident->member_number . ' - ' . $resident->name ); ?>
+						</option>
+					<?php endforeach; ?>
+				</select>
+			</div>
+			<div>
+				<label for="sr_account_text_member">DNS-nummer</label><br>
+				<input type="text" name="member_number" id="sr_account_text_member" value="<?php echo esc_attr( $selected_member ); ?>">
+			</div>
+			<div>
+				<button type="submit" class="button button-primary">Vis tekster</button>
+			</div>
+		</form>
+
+		<h2>Tilknyttede tekster</h2>
+		<table class="widefat striped">
+			<thead>
+				<tr>
+					<th>Tekst</th>
+					<th>Oprettet</th>
+					<th>Slet</th>
+				</tr>
+			</thead>
+			<tbody>
+				<?php if ( ! $selected_resident_id ) : ?>
+					<tr>
+						<td colspan="3">Vælg en beboer for at se kontotekster.</td>
+					</tr>
+				<?php elseif ( empty( $texts ) ) : ?>
+					<tr>
+						<td colspan="3">Ingen kontotekster fundet.</td>
+					</tr>
+				<?php else : ?>
+					<?php foreach ( $texts as $text_row ) : ?>
+						<tr>
+							<td><?php echo esc_html( $text_row->text_value ); ?></td>
+							<td><?php echo esc_html( $text_row->created_at ); ?></td>
+							<td>
+								<form method="post">
+									<?php wp_nonce_field( 'sr_delete_account_text_action', 'sr_delete_account_text_nonce' ); ?>
+									<input type="hidden" name="text_id" value="<?php echo esc_attr( $text_row->id ); ?>">
+									<button type="submit" name="sr_delete_account_text" class="button button-link-delete">Slet</button>
+								</form>
+							</td>
+						</tr>
+					<?php endforeach; ?>
+				<?php endif; ?>
+			</tbody>
+		</table>
+	</div>
 	<?php
 }
 
@@ -1510,6 +1794,9 @@ function sr_render_payments_page() {
 				} elseif ( 'verified' === $existing->status && ! $is_verified ) {
 					sr_log_action( 'unverify', 'payment', $payment_id, 'Indbetaling markeret som ikke verificeret' );
 				}
+				if ( $bank_statement_id ) {
+					sr_maybe_add_resident_text( $resident_id, sr_get_bank_statement_text( $bank_statement_id ) );
+				}
 			}
 		} elseif ( $resident_id && $month && $year && ! $skip_payment_update && ! sr_is_period_locked( $month, $year ) ) {
 			$status = $is_verified ? 'verified' : 'pending';
@@ -1539,6 +1826,9 @@ function sr_render_payments_page() {
 			if ( $is_verified ) {
 				sr_log_action( 'verify', 'payment', $wpdb->insert_id, 'Indbetaling verificeret' );
 				sr_notify_resident_verified( $resident_id, 'indbetaling' );
+			}
+			if ( $bank_statement_id ) {
+				sr_maybe_add_resident_text( $resident_id, sr_get_bank_statement_text( $bank_statement_id ) );
 			}
 		}
 	}
@@ -1614,6 +1904,17 @@ function sr_render_payments_page() {
 					array( '%d' )
 				);
 				sr_log_action( 'update', 'payment', $payment_id, 'Bankudtog tilknytning opdateret' );
+				if ( $bank_statement_id ) {
+					$payment_resident_id = (int) $wpdb->get_var(
+						$wpdb->prepare(
+							"SELECT resident_id FROM {$table_payments} WHERE id = %d",
+							$payment_id
+						)
+					);
+					if ( $payment_resident_id ) {
+						sr_maybe_add_resident_text( $payment_resident_id, sr_get_bank_statement_text( $bank_statement_id ) );
+					}
+				}
 				$message = '<div class="notice notice-success"><p>Bankudtogstilknytningen er opdateret.</p></div>';
 			}
 		}
@@ -2467,6 +2768,8 @@ function sr_render_bank_statements_page() {
 
 	global $wpdb;
 	$table_bank_statements = $wpdb->prefix . 'sr_bank_statements';
+	$table_payments        = $wpdb->prefix . 'sr_payments';
+	$table_residents       = $wpdb->prefix . 'sr_residents';
 	$per_page              = 20;
 	$current_page          = sr_get_paged_param( 'sr_page' );
 	$message               = '';
@@ -2484,6 +2787,8 @@ function sr_render_bank_statements_page() {
 			$added   = 0;
 			$skipped = 0;
 			$read_rows = 0;
+			$auto_created = array();
+			$auto_errors  = array();
 			$contents = file_get_contents( $file['tmp_name'] );
 
 			if ( false === $contents ) {
@@ -2567,6 +2872,65 @@ function sr_render_bank_statements_page() {
 
 					if ( false !== $inserted ) {
 						$added++;
+						$bank_statement_id = (int) $wpdb->insert_id;
+						$resident_ids = sr_get_resident_ids_by_text( $text );
+						if ( 1 === count( $resident_ids ) ) {
+							$resident_id = (int) $resident_ids[0];
+							$period      = sr_get_period_from_bank_statement_date( $date );
+
+							if ( ! $period ) {
+								$auto_errors[] = 'Kunne ikke aflæse datoen for auto-tilknytning: ' . $text;
+							} elseif ( sr_is_period_locked( $period['month'], $period['year'] ) ) {
+								$auto_errors[] = 'Perioden er låst for auto-tilknytning: ' . $text;
+							} else {
+								$existing_payment = $wpdb->get_var(
+									$wpdb->prepare(
+										"SELECT id FROM {$table_payments} WHERE bank_statement_id = %d",
+										$bank_statement_id
+									)
+								);
+								if ( ! $existing_payment ) {
+									$inserted_payment = $wpdb->insert(
+										$table_payments,
+										array(
+											'resident_id'       => $resident_id,
+											'bank_statement_id' => $bank_statement_id,
+											'period_month'      => $period['month'],
+											'period_year'       => $period['year'],
+											'amount'            => (float) $amount,
+											'status'            => 'verified',
+											'submitted_by'      => get_current_user_id(),
+											'submitted_at'      => sr_now(),
+											'verified_by'       => get_current_user_id(),
+											'verified_at'       => sr_now(),
+										),
+										array( '%d', '%d', '%d', '%d', '%f', '%s', '%d', '%s', '%d', '%s' )
+									);
+									if ( false !== $inserted_payment ) {
+										sr_log_action( 'create', 'payment', $wpdb->insert_id, 'Auto-tilknytning fra bankudtog' );
+										sr_log_action( 'verify', 'payment', $wpdb->insert_id, 'Indbetaling verificeret (auto)' );
+										sr_maybe_add_resident_text( $resident_id, $text );
+										$resident_info = $wpdb->get_row(
+											$wpdb->prepare(
+												"SELECT name, member_number FROM {$table_residents} WHERE id = %d",
+												$resident_id
+											)
+										);
+										$auto_created[] = array(
+											'resident_name'   => $resident_info->name ?? '',
+											'member_number'   => $resident_info->member_number ?? '',
+											'text'            => $text,
+											'amount'          => $amount,
+											'date'            => $date,
+										);
+									} else {
+										$auto_errors[] = 'Kunne ikke oprette auto-tilknyttet betaling: ' . $text;
+									}
+								}
+							}
+						} elseif ( count( $resident_ids ) > 1 ) {
+							$auto_errors[] = 'Flere beboere matcher teksten, auto-tilknytning sprunget over: ' . $text;
+						}
 					}
 				}
 
@@ -2578,6 +2942,25 @@ function sr_render_bank_statements_page() {
 						$skipped
 					) .
 					'</p></div>';
+
+				if ( ! empty( $auto_created ) ) {
+					$list_items = array();
+					foreach ( $auto_created as $auto_row ) {
+						$label = trim( $auto_row['member_number'] . ' ' . $auto_row['resident_name'] );
+						$list_items[] = sprintf(
+							'%s (%s) - %s kr. - %s',
+							$label,
+							$auto_row['date'],
+							number_format( (float) $auto_row['amount'], 2, ',', '.' ),
+							$auto_row['text']
+						);
+					}
+					$message .= '<div class="notice notice-success"><p>Auto-tilknyttede indbetalinger:</p><ul><li>' . implode( '</li><li>', array_map( 'esc_html', $list_items ) ) . '</li></ul></div>';
+				}
+
+				if ( ! empty( $auto_errors ) ) {
+					$message .= '<div class="notice notice-error"><p>Auto-tilknytning kunne ikke gennemføres for følgende linjer:</p><ul><li>' . implode( '</li><li>', array_map( 'esc_html', $auto_errors ) ) . '</li></ul></div>';
+				}
 				$popup_message = sprintf(
 					"Indlæsning fuldført.\nLæste rækker: %d\nIndsatte rækker: %d\nSkippede rækker (duplikater): %d",
 					$read_rows,
@@ -2752,6 +3135,7 @@ function sr_render_bank_statement_link_page() {
 				if ( false !== $inserted ) {
 					sr_log_action( 'create', 'payment', $wpdb->insert_id, 'Bankudtog tilknytning' );
 					sr_log_action( 'verify', 'payment', $wpdb->insert_id, 'Indbetaling verificeret' );
+					sr_maybe_add_resident_text( $resident_id, $bank_statement->Tekst ?? '' );
 					$linked_count++;
 				} else {
 					$errors[] = 'Kunne ikke oprette en indbetaling. Prøv igen.';
