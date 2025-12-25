@@ -2841,7 +2841,7 @@ function sr_render_graphs_page() {
 			}
 
 			const renderLineChart = (config) => {
-				const { canvasId, series, legend, valueLabelSeriesIndex } = config;
+				const { canvasId, series, legend, valueLabelSeriesIndexes } = config;
 				const canvas = document.getElementById(canvasId);
 				if (!canvas || !canvas.getContext) {
 					return;
@@ -2916,18 +2916,23 @@ function sr_render_graphs_page() {
 					drawLine(entry.data, entry.color);
 				});
 
-				if (typeof valueLabelSeriesIndex === 'number' && series[valueLabelSeriesIndex]) {
-					const labelSeries = series[valueLabelSeriesIndex].data;
-					ctx.fillStyle = series[valueLabelSeriesIndex].color;
+				if (Array.isArray(valueLabelSeriesIndexes) && valueLabelSeriesIndexes.length) {
 					ctx.font = '11px Arial, sans-serif';
-					labelSeries.forEach((value, index) => {
-						if (!value) {
+					valueLabelSeriesIndexes.forEach((seriesIndex) => {
+						const labelSeries = series[seriesIndex];
+						if (!labelSeries) {
 							return;
 						}
-						const x = getX(index);
-						const y = getY(value) - 6;
-						const label = Math.round(value).toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kr.';
-						ctx.fillText(label, x + 6, y);
+						ctx.fillStyle = labelSeries.color;
+						labelSeries.data.forEach((value, index) => {
+							if (!value) {
+								return;
+							}
+							const x = getX(index);
+							const y = getY(value) - 6;
+							const label = Math.round(value).toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kr.';
+							ctx.fillText(label, x + 6, y);
+						});
 					});
 					ctx.font = '12px Arial, sans-serif';
 				}
@@ -2973,6 +2978,7 @@ function sr_render_graphs_page() {
 				legend: [
 					{ label: 'Saldo (kr.)', color: '#d63638' },
 				],
+				valueLabelSeriesIndexes: [0],
 			});
 
 			renderLineChart({
@@ -2985,7 +2991,7 @@ function sr_render_graphs_page() {
 					{ label: 'Totalt forbrug (kr.)', color: '#00a32a' },
 					{ label: 'Totalt indbetalt (kr.)', color: '#2271b1' },
 				],
-				valueLabelSeriesIndex: 0,
+				valueLabelSeriesIndexes: [0, 1],
 			});
 		})();
 	</script>
