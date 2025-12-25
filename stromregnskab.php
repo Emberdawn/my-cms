@@ -2763,28 +2763,10 @@ function sr_render_graphs_page() {
 		$selected_year = ! empty( $year_options ) ? (int) $year_options[0] : $current_year;
 	}
 
-	$rows = $wpdb->get_results(
-		$wpdb->prepare(
-			"SELECT period_month, SUM(consumption_kwh) AS total_kwh
-			 FROM {$table_summary}
-			 WHERE resident_id = %d AND period_year = %d
-			 GROUP BY period_month",
-			$selected_resident_id,
-			$selected_year
-		)
-	);
-
-	$monthly_data = array_fill( 1, 12, 0.0 );
-	foreach ( $rows as $row ) {
-		$month_index = (int) $row->period_month;
-		if ( $month_index >= 1 && $month_index <= 12 ) {
-			$monthly_data[ $month_index ] = (float) $row->total_kwh;
-		}
-	}
-
 	$account_rows = sr_get_resident_account_rows( $selected_resident_id );
 	$monthly_total_payments = array_fill( 1, 12, 0.0 );
 	$monthly_balances = array_fill( 1, 12, 0.0 );
+	$monthly_consumption = array_fill( 1, 12, 0.0 );
 	foreach ( $account_rows as $account_row ) {
 		if ( (int) $account_row['period_year'] !== $selected_year ) {
 			continue;
@@ -2797,12 +2779,16 @@ function sr_render_graphs_page() {
 		if ( null !== $account_row['balance'] ) {
 			$monthly_balances[ $month_index ] = (float) $account_row['balance'];
 		}
+		if ( isset( $account_row['consumption'] ) ) {
+			$monthly_consumption[ $month_index ] += (float) $account_row['consumption'];
+		}
 	}
 
 	$month_labels = array( 'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec' );
 	$chart_data   = array_values( $monthly_total_payments );
 	$balance_data = array_values( $monthly_balances );
-	$has_data     = array_sum( $chart_data ) > 0 || array_sum( array_map( 'abs', $balance_data ) ) > 0;
+	$consumption_data = array_values( $monthly_consumption );
+	$has_data     = array_sum( $chart_data ) > 0 || array_sum( array_map( 'abs', $balance_data ) ) > 0 || array_sum( $consumption_data ) > 0;
 	?>
 	<div class="wrap">
 		<h1>Grafer</h1>
@@ -2830,7 +2816,7 @@ function sr_render_graphs_page() {
 		<div class="sr-graph-panel">
 			<canvas id="sr-kwh-chart" width="960" height="360"></canvas>
 		</div>
-		<p class="description">Grafen viser totalt indbetalt samt saldo pr. måned for den valgte beboer.</p>
+		<p class="description">Grafen viser totalt indbetalt, saldo samt totalt forbrug (kWh) pr. måned for den valgte beboer.</p>
 		<?php if ( ! $has_data ) : ?>
 			<p>Der er endnu ingen verificerede indbetalinger for det valgte år.</p>
 		<?php endif; ?>
@@ -2844,6 +2830,7 @@ function sr_render_graphs_page() {
 		(function() {
 			const data = <?php echo wp_json_encode( $chart_data ); ?>;
 			const balanceData = <?php echo wp_json_encode( $balance_data ); ?>;
+			const consumptionData = <?php echo wp_json_encode( $consumption_data ); ?>;
 			const labels = <?php echo wp_json_encode( $month_labels ); ?>;
 			const canvas = document.getElementById('sr-kwh-chart');
 			if (!canvas || !canvas.getContext) {
@@ -2862,12 +2849,14 @@ function sr_render_graphs_page() {
 			const height = canvas.height;
 			ctx.clearRect(0, 0, width, height);
 
-			const padding = { top: 30, right: 80, bottom: 40, left: 60 };
+			const padding = { top: 30, right: 90, bottom: 40, left: 60 };
 			const chartWidth = width - padding.left - padding.right;
 			const chartHeight = height - padding.top - padding.bottom;
 			const minValue = Math.min(0, ...data, ...balanceData);
 			const maxValue = Math.max(0, ...data, ...balanceData);
 			const valueRange = Math.max(1, maxValue - minValue);
+			const maxConsumption = Math.max(0, ...consumptionData);
+			const consumptionRange = Math.max(1, maxConsumption);
 
 			ctx.strokeStyle = '#ccd0d4';
 			ctx.lineWidth = 1;
@@ -2893,8 +2882,18 @@ function sr_render_graphs_page() {
 				ctx.stroke();
 			}
 
+			ctx.textAlign = 'right';
+			for (let i = 0; i <= yTicks; i++) {
+				const value = (consumptionRange / yTicks) * i;
+				const y = height - padding.bottom - (chartHeight / yTicks) * i;
+				const label = Math.round(value).toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kWh';
+				ctx.fillText(label, width - 8, y + 4);
+			}
+			ctx.textAlign = 'start';
+
 			const getX = (index) => padding.left + (chartWidth / (labels.length - 1)) * index;
 			const getY = (value) => height - padding.bottom - ((value - minValue) / valueRange) * chartHeight;
+			const getYConsumption = (value) => height - padding.bottom - (value / consumptionRange) * chartHeight;
 
 			const drawLine = (series, color, getYValue) => {
 				ctx.strokeStyle = color;
@@ -2923,6 +2922,20 @@ function sr_render_graphs_page() {
 
 			drawLine(data, '#2271b1', getY);
 			drawLine(balanceData, '#d63638', getY);
+			drawLine(consumptionData, '#00a32a', getYConsumption);
+
+			ctx.fillStyle = '#00a32a';
+			ctx.font = '11px Arial, sans-serif';
+			consumptionData.forEach((value, index) => {
+				if (!value) {
+					return;
+				}
+				const x = getX(index);
+				const y = getYConsumption(value) - 6;
+				const label = Math.round(value).toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kWh';
+				ctx.fillText(label, x + 6, y);
+			});
+			ctx.font = '12px Arial, sans-serif';
 
 			ctx.fillStyle = '#1d2327';
 			ctx.textAlign = 'center';
@@ -2946,6 +2959,7 @@ function sr_render_graphs_page() {
 			const legendBoxOffset = legendBoxSize + 6;
 			const totalPaidLabel = 'Total indbetalt (kr.)';
 			const balanceLabel = 'Saldo (kr.)';
+			const consumptionLabel = 'Totalt forbrug (kWh)';
 
 			ctx.fillStyle = '#2271b1';
 			ctx.fillRect(padding.left, padding.top - 18, legendBoxSize, legendBoxSize);
@@ -2958,6 +2972,13 @@ function sr_render_graphs_page() {
 			ctx.fillRect(balanceStart, padding.top - 18, legendBoxSize, legendBoxSize);
 			ctx.fillStyle = '#1d2327';
 			ctx.fillText(balanceLabel, balanceStart + legendBoxOffset, legendY);
+
+			const balanceWidth = ctx.measureText(balanceLabel).width;
+			const consumptionStart = balanceStart + legendBoxOffset + balanceWidth + legendGap;
+			ctx.fillStyle = '#00a32a';
+			ctx.fillRect(consumptionStart, padding.top - 18, legendBoxSize, legendBoxSize);
+			ctx.fillStyle = '#1d2327';
+			ctx.fillText(consumptionLabel, consumptionStart + legendBoxOffset, legendY);
 		})();
 	</script>
 	<?php
