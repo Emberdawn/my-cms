@@ -2758,6 +2758,7 @@ function sr_render_graphs_page() {
 	$account_rows = sr_get_resident_account_rows( $selected_resident_id );
 	$monthly_balances = array_fill( 1, 12, 0.0 );
 	$monthly_total_cost = array_fill( 1, 12, 0.0 );
+	$monthly_total_payments = array_fill( 1, 12, 0.0 );
 	foreach ( $account_rows as $account_row ) {
 		if ( (int) $account_row['period_year'] !== $selected_year ) {
 			continue;
@@ -2772,12 +2773,18 @@ function sr_render_graphs_page() {
 		if ( null !== $account_row['total_cost'] ) {
 			$monthly_total_cost[ $month_index ] = (float) $account_row['total_cost'];
 		}
+		if ( null !== $account_row['total_payments'] ) {
+			$monthly_total_payments[ $month_index ] = (float) $account_row['total_payments'];
+		}
 	}
 
 	$month_labels = array( 'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec' );
 	$balance_data = array_values( $monthly_balances );
 	$total_cost_data = array_values( $monthly_total_cost );
-	$has_data     = array_sum( array_map( 'abs', $balance_data ) ) > 0 || array_sum( $total_cost_data ) > 0;
+	$total_payments_data = array_values( $monthly_total_payments );
+	$has_balance_data = array_sum( array_map( 'abs', $balance_data ) ) > 0;
+	$has_totals_data  = array_sum( $total_cost_data ) > 0 || array_sum( $total_payments_data ) > 0;
+	$has_data     = $has_balance_data || $has_totals_data;
 	?>
 	<div class="wrap">
 		<h1>Grafer</h1>
@@ -2805,7 +2812,11 @@ function sr_render_graphs_page() {
 		<div class="sr-graph-panel">
 			<canvas id="sr-kwh-chart" width="960" height="360"></canvas>
 		</div>
-		<p class="description">Grafen viser saldo samt totalt forbrug (kr.) pr. måned for den valgte beboer.</p>
+		<p class="description">Grafen viser saldo pr. måned for den valgte beboer.</p>
+		<div class="sr-graph-panel">
+			<canvas id="sr-total-chart" width="960" height="360"></canvas>
+		</div>
+		<p class="description">Grafen viser totalt forbrug (kr.) og totalt indbetalt (kr.) pr. måned for den valgte beboer.</p>
 		<?php if ( ! $has_data ) : ?>
 			<p>Der er endnu ingen verificerede indbetalinger for det valgte år.</p>
 		<?php endif; ?>
@@ -2814,17 +2825,14 @@ function sr_render_graphs_page() {
 		.sr-graph-form{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:16px 0}
 		.sr-graph-form label{font-weight:600}
 		.sr-graph-panel{background:#fff;border:1px solid #dcdcde;border-radius:6px;padding:16px;max-width:980px}
+		.sr-graph-panel + .sr-graph-panel{margin-top:16px}
 	</style>
 	<script>
 		(function() {
 			const balanceData = <?php echo wp_json_encode( $balance_data ); ?>;
 			const totalCostData = <?php echo wp_json_encode( $total_cost_data ); ?>;
+			const totalPaymentsData = <?php echo wp_json_encode( $total_payments_data ); ?>;
 			const labels = <?php echo wp_json_encode( $month_labels ); ?>;
-			const canvas = document.getElementById('sr-kwh-chart');
-			if (!canvas || !canvas.getContext) {
-				return;
-			}
-
 			const form = document.querySelector('.sr-graph-form');
 			if (form) {
 				form.querySelectorAll('select').forEach((select) => {
@@ -2832,121 +2840,153 @@ function sr_render_graphs_page() {
 				});
 			}
 
-			const ctx = canvas.getContext('2d');
-			const width = canvas.width;
-			const height = canvas.height;
-			ctx.clearRect(0, 0, width, height);
+			const renderLineChart = (config) => {
+				const { canvasId, series, legend, valueLabelSeriesIndex } = config;
+				const canvas = document.getElementById(canvasId);
+				if (!canvas || !canvas.getContext) {
+					return;
+				}
 
-			const padding = { top: 30, right: 90, bottom: 40, left: 60 };
-			const chartWidth = width - padding.left - padding.right;
-			const chartHeight = height - padding.top - padding.bottom;
-			const minValue = Math.min(0, ...balanceData, ...totalCostData);
-			const maxValue = Math.max(0, ...balanceData, ...totalCostData);
-			const valueRange = Math.max(1, maxValue - minValue);
+				const ctx = canvas.getContext('2d');
+				const width = canvas.width;
+				const height = canvas.height;
+				ctx.clearRect(0, 0, width, height);
 
-			ctx.strokeStyle = '#ccd0d4';
-			ctx.lineWidth = 1;
-			ctx.beginPath();
-			ctx.moveTo(padding.left, padding.top);
-			ctx.lineTo(padding.left, height - padding.bottom);
-			ctx.lineTo(width - padding.right, height - padding.bottom);
-			ctx.lineTo(width - padding.right, padding.top);
-			ctx.stroke();
+				const padding = { top: 30, right: 90, bottom: 40, left: 60 };
+				const chartWidth = width - padding.left - padding.right;
+				const chartHeight = height - padding.top - padding.bottom;
+				const allValues = series.reduce((values, entry) => values.concat(entry.data), []);
+				const minValue = Math.min(0, ...allValues);
+				const maxValue = Math.max(0, ...allValues);
+				const valueRange = Math.max(1, maxValue - minValue);
 
-			ctx.fillStyle = '#1d2327';
-			ctx.font = '12px Arial, sans-serif';
-			const yTicks = 5;
-			for (let i = 0; i <= yTicks; i++) {
-				const value = minValue + (valueRange / yTicks) * i;
-				const y = height - padding.bottom - (chartHeight / yTicks) * i;
-				const label = Math.round(value).toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kr.';
-				ctx.fillText(label, 8, y + 4);
-				ctx.strokeStyle = '#f0f0f1';
+				ctx.strokeStyle = '#ccd0d4';
+				ctx.lineWidth = 1;
 				ctx.beginPath();
-				ctx.moveTo(padding.left, y);
-				ctx.lineTo(width - padding.right, y);
-				ctx.stroke();
-			}
-
-			const getX = (index) => padding.left + (chartWidth / (labels.length - 1)) * index;
-			const getY = (value) => height - padding.bottom - ((value - minValue) / valueRange) * chartHeight;
-
-			const drawLine = (series, color, getYValue) => {
-				ctx.strokeStyle = color;
-				ctx.lineWidth = 2;
-				ctx.beginPath();
-				series.forEach((value, index) => {
-					const x = getX(index);
-					const y = getYValue(value);
-					if (index === 0) {
-						ctx.moveTo(x, y);
-					} else {
-						ctx.lineTo(x, y);
-					}
-				});
+				ctx.moveTo(padding.left, padding.top);
+				ctx.lineTo(padding.left, height - padding.bottom);
+				ctx.lineTo(width - padding.right, height - padding.bottom);
+				ctx.lineTo(width - padding.right, padding.top);
 				ctx.stroke();
 
-				ctx.fillStyle = color;
-				series.forEach((value, index) => {
-					const x = getX(index);
-					const y = getYValue(value);
+				ctx.fillStyle = '#1d2327';
+				ctx.font = '12px Arial, sans-serif';
+				const yTicks = 5;
+				for (let i = 0; i <= yTicks; i++) {
+					const value = minValue + (valueRange / yTicks) * i;
+					const y = height - padding.bottom - (chartHeight / yTicks) * i;
+					const label = Math.round(value).toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kr.';
+					ctx.fillText(label, 8, y + 4);
+					ctx.strokeStyle = '#f0f0f1';
 					ctx.beginPath();
-					ctx.arc(x, y, 3, 0, Math.PI * 2);
-					ctx.fill();
+					ctx.moveTo(padding.left, y);
+					ctx.lineTo(width - padding.right, y);
+					ctx.stroke();
+				}
+
+				const getX = (index) => padding.left + (chartWidth / (labels.length - 1)) * index;
+				const getY = (value) => height - padding.bottom - ((value - minValue) / valueRange) * chartHeight;
+
+				const drawLine = (seriesData, color) => {
+					ctx.strokeStyle = color;
+					ctx.lineWidth = 2;
+					ctx.beginPath();
+					seriesData.forEach((value, index) => {
+						const x = getX(index);
+						const y = getY(value);
+						if (index === 0) {
+							ctx.moveTo(x, y);
+						} else {
+							ctx.lineTo(x, y);
+						}
+					});
+					ctx.stroke();
+
+					ctx.fillStyle = color;
+					seriesData.forEach((value, index) => {
+						const x = getX(index);
+						const y = getY(value);
+						ctx.beginPath();
+						ctx.arc(x, y, 3, 0, Math.PI * 2);
+						ctx.fill();
+					});
+				};
+
+				series.forEach((entry) => {
+					drawLine(entry.data, entry.color);
+				});
+
+				if (typeof valueLabelSeriesIndex === 'number' && series[valueLabelSeriesIndex]) {
+					const labelSeries = series[valueLabelSeriesIndex].data;
+					ctx.fillStyle = series[valueLabelSeriesIndex].color;
+					ctx.font = '11px Arial, sans-serif';
+					labelSeries.forEach((value, index) => {
+						if (!value) {
+							return;
+						}
+						const x = getX(index);
+						const y = getY(value) - 6;
+						const label = Math.round(value).toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kr.';
+						ctx.fillText(label, x + 6, y);
+					});
+					ctx.font = '12px Arial, sans-serif';
+				}
+
+				ctx.fillStyle = '#1d2327';
+				ctx.textAlign = 'center';
+				ctx.textBaseline = 'top';
+				const labelSpacing = chartWidth / (labels.length - 1);
+				const labelInterval = Math.max(1, Math.ceil(50 / labelSpacing));
+				labels.forEach((label, index) => {
+					if (index % labelInterval !== 0) {
+						return;
+					}
+					const x = getX(index);
+					ctx.fillText(label, x, height - padding.bottom + 12);
+				});
+				ctx.textAlign = 'start';
+				ctx.textBaseline = 'alphabetic';
+
+				ctx.lineWidth = 0;
+				const legendY = padding.top - 8;
+				const legendGap = 16;
+				const legendBoxSize = 12;
+				const legendBoxOffset = legendBoxSize + 6;
+				let legendX = padding.left;
+				legend.forEach((entry, index) => {
+					if (index > 0) {
+						legendX += legendGap;
+					}
+					ctx.fillStyle = entry.color;
+					ctx.fillRect(legendX, padding.top - 18, legendBoxSize, legendBoxSize);
+					ctx.fillStyle = '#1d2327';
+					ctx.fillText(entry.label, legendX + legendBoxOffset, legendY);
+					legendX += legendBoxOffset + ctx.measureText(entry.label).width;
 				});
 			};
 
-			drawLine(balanceData, '#d63638', getY);
-			drawLine(totalCostData, '#00a32a', getY);
-
-			ctx.fillStyle = '#00a32a';
-			ctx.font = '11px Arial, sans-serif';
-			totalCostData.forEach((value, index) => {
-				if (!value) {
-					return;
-				}
-				const x = getX(index);
-				const y = getY(value) - 6;
-				const label = Math.round(value).toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kr.';
-				ctx.fillText(label, x + 6, y);
+			renderLineChart({
+				canvasId: 'sr-kwh-chart',
+				series: [
+					{ data: balanceData, color: '#d63638' },
+				],
+				legend: [
+					{ label: 'Saldo (kr.)', color: '#d63638' },
+				],
 			});
-			ctx.font = '12px Arial, sans-serif';
 
-			ctx.fillStyle = '#1d2327';
-			ctx.textAlign = 'center';
-			ctx.textBaseline = 'top';
-			const labelSpacing = chartWidth / (labels.length - 1);
-			const labelInterval = Math.max(1, Math.ceil(50 / labelSpacing));
-			labels.forEach((label, index) => {
-				if (index % labelInterval !== 0) {
-					return;
-				}
-				const x = getX(index);
-				ctx.fillText(label, x, height - padding.bottom + 12);
+			renderLineChart({
+				canvasId: 'sr-total-chart',
+				series: [
+					{ data: totalCostData, color: '#00a32a' },
+					{ data: totalPaymentsData, color: '#2271b1' },
+				],
+				legend: [
+					{ label: 'Totalt forbrug (kr.)', color: '#00a32a' },
+					{ label: 'Totalt indbetalt (kr.)', color: '#2271b1' },
+				],
+				valueLabelSeriesIndex: 0,
 			});
-			ctx.textAlign = 'start';
-			ctx.textBaseline = 'alphabetic';
-
-			ctx.lineWidth = 0;
-			const legendY = padding.top - 8;
-			const legendGap = 16;
-			const legendBoxSize = 12;
-			const legendBoxOffset = legendBoxSize + 6;
-			const balanceLabel = 'Saldo (kr.)';
-			const totalCostLabel = 'Totalt forbrug (kr.)';
-
-			const balanceStart = padding.left;
-			ctx.fillStyle = '#d63638';
-			ctx.fillRect(balanceStart, padding.top - 18, legendBoxSize, legendBoxSize);
-			ctx.fillStyle = '#1d2327';
-			ctx.fillText(balanceLabel, balanceStart + legendBoxOffset, legendY);
-
-			const balanceWidth = ctx.measureText(balanceLabel).width;
-			const consumptionStart = balanceStart + legendBoxOffset + balanceWidth + legendGap;
-			ctx.fillStyle = '#00a32a';
-			ctx.fillRect(consumptionStart, padding.top - 18, legendBoxSize, legendBoxSize);
-			ctx.fillStyle = '#1d2327';
-			ctx.fillText(totalCostLabel, consumptionStart + legendBoxOffset, legendY);
 		})();
 	</script>
 	<?php
