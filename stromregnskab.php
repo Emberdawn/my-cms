@@ -2704,8 +2704,6 @@ function sr_render_graphs_page() {
 	global $wpdb;
 	$table_residents = $wpdb->prefix . 'sr_residents';
 	$table_readings  = $wpdb->prefix . 'sr_meter_readings';
-	$table_payments  = $wpdb->prefix . 'sr_payments';
-	$table_summary   = $wpdb->prefix . 'sr_monthly_summary';
 
 	$residents = $wpdb->get_results( "SELECT id, name, member_number FROM {$table_residents} ORDER BY name ASC" );
 	if ( empty( $residents ) ) {
@@ -2760,47 +2758,21 @@ function sr_render_graphs_page() {
 		}
 	}
 
-	$payment_rows = $wpdb->get_results(
-		$wpdb->prepare(
-			"SELECT period_month, SUM(amount) AS total_paid
-			 FROM {$table_payments}
-			 WHERE resident_id = %d AND period_year = %d AND status = 'verified'
-			 GROUP BY period_month",
-			$selected_resident_id,
-			$selected_year
-		)
-	);
-
-	$summary_rows = $wpdb->get_results(
-		$wpdb->prepare(
-			"SELECT period_month, SUM(cost) AS total_cost
-			 FROM {$table_summary}
-			 WHERE resident_id = %d AND period_year = %d
-			 GROUP BY period_month",
-			$selected_resident_id,
-			$selected_year
-		)
-	);
-
+	$account_rows = sr_get_resident_account_rows( $selected_resident_id );
 	$monthly_payments = array_fill( 1, 12, 0.0 );
-	foreach ( $payment_rows as $row ) {
-		$month_index = (int) $row->period_month;
-		if ( $month_index >= 1 && $month_index <= 12 ) {
-			$monthly_payments[ $month_index ] = (float) $row->total_paid;
+	$monthly_balances = array_fill( 1, 12, 0.0 );
+	foreach ( $account_rows as $account_row ) {
+		if ( (int) $account_row['period_year'] !== $selected_year ) {
+			continue;
 		}
-	}
-
-	$monthly_costs = array_fill( 1, 12, 0.0 );
-	foreach ( $summary_rows as $row ) {
-		$month_index = (int) $row->period_month;
-		if ( $month_index >= 1 && $month_index <= 12 ) {
-			$monthly_costs[ $month_index ] = (float) $row->total_cost;
+		$month_index = (int) $account_row['period_month'];
+		if ( $month_index < 1 || $month_index > 12 ) {
+			continue;
 		}
-	}
-
-	$monthly_balances = array();
-	for ( $month_index = 1; $month_index <= 12; $month_index++ ) {
-		$monthly_balances[ $month_index ] = (float) $monthly_payments[ $month_index ] - (float) $monthly_costs[ $month_index ];
+		$monthly_payments[ $month_index ] = (float) $account_row['payments'];
+		if ( null !== $account_row['balance'] ) {
+			$monthly_balances[ $month_index ] = (float) $account_row['balance'];
+		}
 	}
 
 	$month_labels = array( 'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec' );
