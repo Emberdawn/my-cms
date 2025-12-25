@@ -908,7 +908,7 @@ function sr_get_resident_account_rows( $resident_id ) {
 		$running_cost += (float) $row['cost'];
 		$rows[ $index ]['total_cost'] = $running_cost;
 
-		$running_balance          += (float) $row['cost'] - $payments_total;
+		$running_balance          += $payments_total - (float) $row['cost'];
 		$rows[ $index ]['balance'] = $running_balance;
 	}
 
