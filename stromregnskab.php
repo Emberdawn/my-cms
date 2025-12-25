@@ -4488,6 +4488,7 @@ function sr_resident_graphs_shortcode() {
 	<style>
 		.sr-graph-dashboard .sr-graph-form{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:16px 0}
 		.sr-graph-dashboard .sr-graph-form label{font-weight:600}
+		.sr-graph-dashboard table{font-size:0.9rem}
 		.sr-graph-dashboard .sr-graph-panel{background:#fff;border:1px solid #dcdcde;border-radius:6px;padding:16px;max-width:980px}
 		.sr-graph-dashboard .sr-graph-panel + .sr-graph-panel{margin-top:16px}
 	</style>
