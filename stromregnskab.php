@@ -2865,10 +2865,9 @@ function sr_render_graphs_page() {
 			const padding = { top: 30, right: 80, bottom: 40, left: 60 };
 			const chartWidth = width - padding.left - padding.right;
 			const chartHeight = height - padding.top - padding.bottom;
-			const maxValue = Math.max(1, ...data);
-			const balanceMin = Math.min(0, ...balanceData);
-			const balanceMax = Math.max(0, ...balanceData);
-			const balanceRange = Math.max(1, balanceMax - balanceMin);
+			const minValue = Math.min(0, ...data, ...balanceData);
+			const maxValue = Math.max(0, ...data, ...balanceData);
+			const valueRange = Math.max(1, maxValue - minValue);
 
 			ctx.strokeStyle = '#ccd0d4';
 			ctx.lineWidth = 1;
@@ -2883,9 +2882,9 @@ function sr_render_graphs_page() {
 			ctx.font = '12px Arial, sans-serif';
 			const yTicks = 5;
 			for (let i = 0; i <= yTicks; i++) {
-				const value = Math.round((maxValue / yTicks) * i);
+				const value = minValue + (valueRange / yTicks) * i;
 				const y = height - padding.bottom - (chartHeight / yTicks) * i;
-				const label = value.toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kr.';
+				const label = Math.round(value).toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kr.';
 				ctx.fillText(label, 8, y + 4);
 				ctx.strokeStyle = '#f0f0f1';
 				ctx.beginPath();
@@ -2894,17 +2893,8 @@ function sr_render_graphs_page() {
 				ctx.stroke();
 			}
 
-			for (let i = 0; i <= yTicks; i++) {
-				const value = balanceMin + (balanceRange / yTicks) * i;
-				const y = height - padding.bottom - (chartHeight / yTicks) * i;
-				const label = value.toLocaleString('da-DK', { maximumFractionDigits: 0 }) + ' kr.';
-				ctx.fillStyle = '#1d2327';
-				ctx.fillText(label, width - padding.right + 6, y + 4);
-			}
-
 			const getX = (index) => padding.left + (chartWidth / (labels.length - 1)) * index;
-			const getY = (value) => height - padding.bottom - (value / maxValue) * chartHeight;
-			const getBalanceY = (value) => height - padding.bottom - ((value - balanceMin) / balanceRange) * chartHeight;
+			const getY = (value) => height - padding.bottom - ((value - minValue) / valueRange) * chartHeight;
 
 			const drawLine = (series, color, getYValue) => {
 				ctx.strokeStyle = color;
@@ -2932,7 +2922,7 @@ function sr_render_graphs_page() {
 			};
 
 			drawLine(data, '#2271b1', getY);
-			drawLine(balanceData, '#d63638', getBalanceY);
+			drawLine(balanceData, '#d63638', getY);
 
 			ctx.fillStyle = '#1d2327';
 			labels.forEach((label, index) => {
