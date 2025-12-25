@@ -2756,7 +2756,6 @@ function sr_render_graphs_page() {
 	}
 
 	$account_rows = sr_get_resident_account_rows( $selected_resident_id );
-	$monthly_total_payments = array_fill( 1, 12, 0.0 );
 	$monthly_balances = array_fill( 1, 12, 0.0 );
 	$monthly_total_cost = array_fill( 1, 12, 0.0 );
 	foreach ( $account_rows as $account_row ) {
@@ -2767,7 +2766,6 @@ function sr_render_graphs_page() {
 		if ( $month_index < 1 || $month_index > 12 ) {
 			continue;
 		}
-		$monthly_total_payments[ $month_index ] = (float) $account_row['total_payments'];
 		if ( null !== $account_row['balance'] ) {
 			$monthly_balances[ $month_index ] = (float) $account_row['balance'];
 		}
@@ -2777,10 +2775,9 @@ function sr_render_graphs_page() {
 	}
 
 	$month_labels = array( 'Jan', 'Feb', 'Mar', 'Apr', 'Maj', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec' );
-	$chart_data   = array_values( $monthly_total_payments );
 	$balance_data = array_values( $monthly_balances );
 	$total_cost_data = array_values( $monthly_total_cost );
-	$has_data     = array_sum( $chart_data ) > 0 || array_sum( array_map( 'abs', $balance_data ) ) > 0 || array_sum( $total_cost_data ) > 0;
+	$has_data     = array_sum( array_map( 'abs', $balance_data ) ) > 0 || array_sum( $total_cost_data ) > 0;
 	?>
 	<div class="wrap">
 		<h1>Grafer</h1>
@@ -2808,7 +2805,7 @@ function sr_render_graphs_page() {
 		<div class="sr-graph-panel">
 			<canvas id="sr-kwh-chart" width="960" height="360"></canvas>
 		</div>
-		<p class="description">Grafen viser totalt indbetalt, saldo samt totalt forbrug (kr.) pr. måned for den valgte beboer.</p>
+		<p class="description">Grafen viser saldo samt totalt forbrug (kr.) pr. måned for den valgte beboer.</p>
 		<?php if ( ! $has_data ) : ?>
 			<p>Der er endnu ingen verificerede indbetalinger for det valgte år.</p>
 		<?php endif; ?>
@@ -2820,7 +2817,6 @@ function sr_render_graphs_page() {
 	</style>
 	<script>
 		(function() {
-			const data = <?php echo wp_json_encode( $chart_data ); ?>;
 			const balanceData = <?php echo wp_json_encode( $balance_data ); ?>;
 			const totalCostData = <?php echo wp_json_encode( $total_cost_data ); ?>;
 			const labels = <?php echo wp_json_encode( $month_labels ); ?>;
@@ -2844,8 +2840,8 @@ function sr_render_graphs_page() {
 			const padding = { top: 30, right: 90, bottom: 40, left: 60 };
 			const chartWidth = width - padding.left - padding.right;
 			const chartHeight = height - padding.top - padding.bottom;
-			const minValue = Math.min(0, ...data, ...balanceData, ...totalCostData);
-			const maxValue = Math.max(0, ...data, ...balanceData, ...totalCostData);
+			const minValue = Math.min(0, ...balanceData, ...totalCostData);
+			const maxValue = Math.max(0, ...balanceData, ...totalCostData);
 			const valueRange = Math.max(1, maxValue - minValue);
 
 			ctx.strokeStyle = '#ccd0d4';
@@ -2900,7 +2896,6 @@ function sr_render_graphs_page() {
 				});
 			};
 
-			drawLine(data, '#2271b1', getY);
 			drawLine(balanceData, '#d63638', getY);
 			drawLine(totalCostData, '#00a32a', getY);
 
@@ -2937,17 +2932,10 @@ function sr_render_graphs_page() {
 			const legendGap = 16;
 			const legendBoxSize = 12;
 			const legendBoxOffset = legendBoxSize + 6;
-			const totalPaidLabel = 'Total indbetalt (kr.)';
 			const balanceLabel = 'Saldo (kr.)';
 			const totalCostLabel = 'Totalt forbrug (kr.)';
 
-			ctx.fillStyle = '#2271b1';
-			ctx.fillRect(padding.left, padding.top - 18, legendBoxSize, legendBoxSize);
-			ctx.fillStyle = '#1d2327';
-			ctx.fillText(totalPaidLabel, padding.left + legendBoxOffset, legendY);
-
-			const totalPaidWidth = ctx.measureText(totalPaidLabel).width;
-			const balanceStart = padding.left + legendBoxOffset + totalPaidWidth + legendGap;
+			const balanceStart = padding.left;
 			ctx.fillStyle = '#d63638';
 			ctx.fillRect(balanceStart, padding.top - 18, legendBoxSize, legendBoxSize);
 			ctx.fillStyle = '#1d2327';
