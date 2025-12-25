@@ -2925,10 +2925,19 @@ function sr_render_graphs_page() {
 			drawLine(balanceData, '#d63638', getY);
 
 			ctx.fillStyle = '#1d2327';
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'top';
+			const labelSpacing = chartWidth / (labels.length - 1);
+			const labelInterval = Math.max(1, Math.ceil(50 / labelSpacing));
 			labels.forEach((label, index) => {
+				if (index % labelInterval !== 0) {
+					return;
+				}
 				const x = getX(index);
-				ctx.fillText(label, x - 10, height - padding.bottom + 18);
+				ctx.fillText(label, x, height - padding.bottom + 12);
 			});
+			ctx.textAlign = 'start';
+			ctx.textBaseline = 'alphabetic';
 
 			ctx.lineWidth = 0;
 			ctx.fillStyle = '#2271b1';
