@@ -2649,7 +2649,10 @@ function sr_render_resident_account_page() {
 			<?php if ( empty( $rows ) ) : ?>
 				<p>Der kræves mindst to verificerede målerstande for at beregne perioder.</p>
 			<?php else : ?>
-				<table class="widefat striped">
+				<p>
+					<button class="button" type="button" id="sr-compact-toggle" aria-pressed="true">Skift kompakt visning</button>
+				</p>
+				<table class="widefat striped sr-compact-table" id="sr-resident-account-table">
 					<thead>
 						<tr>
 							<th>Periode</th>
@@ -2726,6 +2729,22 @@ function sr_render_resident_account_page() {
 						<?php endforeach; ?>
 					</tbody>
 				</table>
+				<script>
+					jQuery(function($) {
+						var $table = $('#sr-resident-account-table');
+						var $toggle = $('#sr-compact-toggle');
+						if (!$table.length || !$toggle.length) {
+							return;
+						}
+
+						var compactClass = 'sr-compact-table';
+						$toggle.on('click', function(event) {
+							event.preventDefault();
+							$table.toggleClass(compactClass);
+							$toggle.attr('aria-pressed', $table.hasClass(compactClass));
+						});
+					});
+				</script>
 				<?php
 				$pagination_base_url = admin_url( 'admin.php?page=' . SR_PLUGIN_SLUG . '-resident-account' );
 				if ( '' !== $selected_from_select ) {
@@ -4531,7 +4550,7 @@ function sr_enqueue_admin_styles( $hook ) {
 
 	wp_add_inline_style(
 		'common',
-		'.sr-negative{color:#b00020;font-weight:600}.sr-positive{color:#1a7f37;font-weight:600}body[class*="stromregnskab"] table.widefat{table-layout:auto}body[class*="stromregnskab"] table.widefat th,body[class*="stromregnskab"] table.widefat td{padding:6px 8px;white-space:normal}'
+		'.sr-negative{color:#b00020;font-weight:600}.sr-positive{color:#1a7f37;font-weight:600}body[class*="stromregnskab"] table.widefat{table-layout:auto}body[class*="stromregnskab"] table.widefat th,body[class*="stromregnskab"] table.widefat td{padding:6px 8px;white-space:normal}body[class*="stromregnskab"] .sr-compact-table th,body[class*="stromregnskab"] .sr-compact-table td{padding:3px 6px;font-size:0.85rem;line-height:1.2}body[class*="stromregnskab"] .sr-compact-table th{white-space:nowrap}'
 	);
 }
 add_action( 'admin_enqueue_scripts', 'sr_enqueue_admin_styles' );
