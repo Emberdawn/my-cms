@@ -4394,7 +4394,7 @@ function sr_resident_graphs_shortcode() {
 		<?php if ( empty( $graph_context['account_rows'] ) ) : ?>
 			<p>Der er ingen regnskabsdata for det valgte år.</p>
 		<?php else : ?>
-			<table>
+			<table class="sr-graph-table">
 				<thead>
 					<tr>
 						<th>Periode</th>
@@ -4489,9 +4489,17 @@ function sr_resident_graphs_shortcode() {
 		.sr-graph-dashboard .sr-graph-form{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:16px 0}
 		.sr-graph-dashboard .sr-graph-form label{font-weight:600}
 		.sr-graph-dashboard table{font-size:0.9rem}
+		.sr-graph-dashboard table.sr-compact{font-size:0.82rem}
+		.sr-graph-dashboard table.sr-compact th,
+		.sr-graph-dashboard table.sr-compact td{padding:4px 6px}
 		.sr-graph-dashboard .sr-graph-panel{background:#fff;border:1px solid #dcdcde;border-radius:6px;padding:16px;max-width:980px}
 		.sr-graph-dashboard .sr-graph-panel + .sr-graph-panel{margin-top:16px}
 	</style>
+	<script>
+		jQuery(function($){
+			$('.sr-graph-dashboard .sr-graph-table').addClass('sr-compact');
+		});
+	</script>
 	<?php
 	sr_render_graphs_script(
 		'.sr-graph-form--resident',
