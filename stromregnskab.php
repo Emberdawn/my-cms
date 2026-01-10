@@ -3456,22 +3456,90 @@ function sr_render_bank_statements_page() {
 	$popup_message         = '';
 	$saved_column_count    = absint( get_option( 'sr_csv_column_count', $default_column_count ) );
 	$saved_delimiter       = sanitize_text_field( get_option( 'sr_csv_delimiter', $default_delimiter ) );
+	$saved_column_configs  = get_option( 'sr_csv_column_configs', array() );
+	if ( ! is_array( $saved_column_configs ) ) {
+		$saved_column_configs = array();
+	}
 	$column_count_raw      = absint( $_POST['sr_csv_column_count'] ?? $saved_column_count );
 	$column_count_value    = max( $default_column_count, $column_count_raw );
-	$column_configs        = $default_column_configs;
+	$column_configs        = array();
 	$delimiter_value       = in_array( $saved_delimiter, array( ';', ',', 'tab' ), true ) ? $saved_delimiter : $default_delimiter;
 	$allowed_types         = array( 'currency', 'date', 'text' );
+	for ( $index = 1; $index <= $column_count_value; $index++ ) {
+		$default_config = $default_column_configs[ $index ] ?? array(
+			'name'     => 'Kolonne ' . $index,
+			'csv'      => $index,
+			'type'     => 'text',
+			'expected' => '',
+		);
+		$saved_config  = $saved_column_configs[ $index ] ?? array();
+		$saved_name    = sanitize_text_field( $saved_config['name'] ?? $default_config['name'] );
+		$saved_csv     = absint( $saved_config['csv'] ?? $default_config['csv'] );
+		$saved_type    = sanitize_text_field( $saved_config['type'] ?? $default_config['type'] );
+		$saved_expected = sanitize_text_field( $saved_config['expected'] ?? $default_config['expected'] );
+
+		if ( $saved_csv < 1 || $saved_csv > $column_count_value ) {
+			$saved_csv = $default_config['csv'];
+		}
+
+		$column_configs[ $index ] = array(
+			'name'     => $saved_name,
+			'csv'      => $saved_csv,
+			'type'     => in_array( $saved_type, $allowed_types, true ) ? $saved_type : $default_config['type'],
+			'expected' => $index <= 4 ? '' : $saved_expected,
+		);
+	}
 
 	if ( isset( $_POST['sr_save_column_settings'] ) ) {
 		check_admin_referer( 'sr_upload_bank_csv_action', 'sr_upload_bank_csv_nonce' );
 		$delimiter_value = sanitize_text_field( wp_unslash( $_POST['sr_csv_delimiter'] ?? $delimiter_value ) );
 		$delimiter_value = in_array( $delimiter_value, array( ';', ',', 'tab' ), true ) ? $delimiter_value : $default_delimiter;
+		$column_names     = array_map( 'sanitize_text_field', (array) wp_unslash( $_POST['sr_csv_column_name'] ?? array() ) );
+		$column_maps      = array_map( 'absint', (array) ( $_POST['sr_csv_column_map'] ?? array() ) );
+		$column_types     = array_map( 'sanitize_text_field', (array) wp_unslash( $_POST['sr_csv_column_type'] ?? array() ) );
+		$column_expected  = array_map( 'sanitize_text_field', (array) wp_unslash( $_POST['sr_csv_column_expected'] ?? array() ) );
+
+		$column_configs = array();
+		for ( $index = 1; $index <= $column_count_value; $index++ ) {
+			$default_config = $default_column_configs[ $index ] ?? array(
+				'name'     => 'Kolonne ' . $index,
+				'csv'      => $index,
+				'type'     => 'text',
+				'expected' => '',
+			);
+			$column_configs[ $index ] = array(
+				'name'     => $column_names[ $index ] ?? $default_config['name'],
+				'csv'      => $column_maps[ $index ] ?? $default_config['csv'],
+				'type'     => in_array( $column_types[ $index ] ?? '', $allowed_types, true ) ? $column_types[ $index ] : $default_config['type'],
+				'expected' => $column_expected[ $index ] ?? $default_config['expected'],
+			);
+		}
+
 		if ( $column_count_raw < $default_column_count ) {
 			$message = '<div class="notice notice-error"><p>CSV Kolonne antal skal være mindst 4.</p></div>';
 		} else {
-			update_option( 'sr_csv_column_count', $column_count_value );
-			update_option( 'sr_csv_delimiter', $delimiter_value );
-			$message = '<div class="notice notice-success"><p>CSV-indstillinger er gemt.</p></div>';
+			$mapping_values = array();
+			foreach ( $column_configs as $config ) {
+				$mapping_values[] = (int) $config['csv'];
+			}
+			$mapping_unique = array_unique( $mapping_values );
+			$mapping_valid  = count( $mapping_values ) === count( $mapping_unique );
+
+			foreach ( $mapping_values as $mapping_value ) {
+				if ( $mapping_value < 1 || $mapping_value > $column_count_value ) {
+					$mapping_valid = false;
+					break;
+				}
+			}
+
+			if ( ! $mapping_valid ) {
+				$message = '<div class="notice notice-error"><p>Vælg unikke CSV-kolonner inden for det angivne antal kolonner.</p></div>';
+			} else {
+				update_option( 'sr_csv_column_count', $column_count_value );
+				update_option( 'sr_csv_delimiter', $delimiter_value );
+				update_option( 'sr_csv_column_configs', $column_configs );
+				$message = '<div class="notice notice-success"><p>CSV-indstillinger er gemt.</p></div>';
+			}
 		}
 	} elseif ( isset( $_POST['sr_upload_bank_csv'] ) ) {
 		check_admin_referer( 'sr_upload_bank_csv_action', 'sr_upload_bank_csv_nonce' );
