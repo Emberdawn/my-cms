@@ -808,6 +808,50 @@ function sr_normalize_decimal_input( $value ) {
 }
 
 /**
+ * Validate a CSV value against an expected type.
+ *
+ * @param string $value         Raw CSV value.
+ * @param string $type          Expected type.
+ * @param string $expected_text Optional expected text for text columns.
+ * @return bool
+ */
+function sr_is_valid_csv_value( $value, $type, $expected_text = '' ) {
+	$value         = trim( (string) $value );
+	$type          = strtolower( $type );
+	$expected_text = trim( (string) $expected_text );
+
+	if ( 'currency' === $type ) {
+		if ( '' === $value ) {
+			return false;
+		}
+		$normalized = str_replace( ' ', '', $value );
+		if ( ! preg_match( '/^-?\\d{1,3}(?:\\.\\d{3})*(?:,\\d{2})?$|^-?\\d+(?:,\\d{2})?$/', $normalized ) ) {
+			return false;
+		}
+		return true;
+	}
+
+	if ( 'date' === $type ) {
+		if ( '' === $value ) {
+			return false;
+		}
+		if ( ! preg_match( '/^(\\d{2})\\.(\\d{2})\\.(\\d{4})$/', $value, $matches ) ) {
+			return false;
+		}
+		return checkdate( (int) $matches[2], (int) $matches[1], (int) $matches[3] );
+	}
+
+	if ( 'text' === $type ) {
+		if ( '' !== $expected_text && $value !== $expected_text ) {
+			return false;
+		}
+		return true;
+	}
+
+	return false;
+}
+
+/**
  * Check if a period is locked.
  *
  * @param int $month Month.
@@ -3375,11 +3419,31 @@ function sr_render_bank_statements_page() {
 	}
 
 	$default_column_count = 4;
-	$default_mapping = array(
-		'date'    => 1,
-		'text'    => 2,
-		'amount'  => 3,
-		'balance' => 4,
+	$default_column_configs = array(
+		1 => array(
+			'name'     => 'Dato',
+			'csv'      => 1,
+			'type'     => 'date',
+			'expected' => '',
+		),
+		2 => array(
+			'name'     => 'Tekst',
+			'csv'      => 2,
+			'type'     => 'text',
+			'expected' => '',
+		),
+		3 => array(
+			'name'     => 'Beløb',
+			'csv'      => 3,
+			'type'     => 'currency',
+			'expected' => '',
+		),
+		4 => array(
+			'name'     => 'Saldo',
+			'csv'      => 4,
+			'type'     => 'currency',
+			'expected' => '',
+		),
 	);
 	$default_delimiter = ';';
 	global $wpdb;
@@ -3390,65 +3454,87 @@ function sr_render_bank_statements_page() {
 	$current_page          = sr_get_paged_param( 'sr_page' );
 	$message               = '';
 	$popup_message         = '';
-	$column_count_value    = $default_column_count;
-	$column_mapping_value  = $default_mapping;
+	$column_count_raw      = absint( $_POST['sr_csv_column_count'] ?? $default_column_count );
+	$column_count_value    = max( $default_column_count, $column_count_raw );
+	$column_configs        = $default_column_configs;
 	$delimiter_value       = $default_delimiter;
+	$allowed_types         = array( 'currency', 'date', 'text' );
 
 	if ( isset( $_POST['sr_upload_bank_csv'] ) ) {
 		check_admin_referer( 'sr_upload_bank_csv_action', 'sr_upload_bank_csv_nonce' );
 		$file = $_FILES['sr_bank_csv'] ?? null;
 
-		$column_mapping_value = array(
-			'date'    => absint( $_POST['sr_csv_map_date'] ?? $default_mapping['date'] ),
-			'text'    => absint( $_POST['sr_csv_map_text'] ?? $default_mapping['text'] ),
-			'amount'  => absint( $_POST['sr_csv_map_amount'] ?? $default_mapping['amount'] ),
-			'balance' => absint( $_POST['sr_csv_map_balance'] ?? $default_mapping['balance'] ),
-		);
+		$column_names     = array_map( 'sanitize_text_field', (array) wp_unslash( $_POST['sr_csv_column_name'] ?? array() ) );
+		$column_maps      = array_map( 'absint', (array) ( $_POST['sr_csv_column_map'] ?? array() ) );
+		$column_types     = array_map( 'sanitize_text_field', (array) wp_unslash( $_POST['sr_csv_column_type'] ?? array() ) );
+		$column_expected  = array_map( 'sanitize_text_field', (array) wp_unslash( $_POST['sr_csv_column_expected'] ?? array() ) );
+		$column_configs   = array();
+		for ( $index = 1; $index <= $column_count_value; $index++ ) {
+			$default_config = $default_column_configs[ $index ] ?? array(
+				'name'     => 'Kolonne ' . $index,
+				'csv'      => $index,
+				'type'     => 'text',
+				'expected' => '',
+			);
+			$column_configs[ $index ] = array(
+				'name'     => $column_names[ $index ] ?? $default_config['name'],
+				'csv'      => $column_maps[ $index ] ?? $default_config['csv'],
+				'type'     => in_array( $column_types[ $index ] ?? '', $allowed_types, true ) ? $column_types[ $index ] : $default_config['type'],
+				'expected' => $column_expected[ $index ] ?? $default_config['expected'],
+			);
+		}
 		$delimiter_value = sanitize_text_field( wp_unslash( $_POST['sr_csv_delimiter'] ?? $default_delimiter ) );
 		$delimiter_value = in_array( $delimiter_value, array( ';', ',', 'tab' ), true ) ? $delimiter_value : $default_delimiter;
 
-		$mapping_values = array_values( $column_mapping_value );
-		$mapping_unique = array_unique( $mapping_values );
-		$mapping_valid  = count( $mapping_values ) === count( $mapping_unique );
-
-		foreach ( $mapping_values as $mapping_value ) {
-			if ( $mapping_value < 1 || $mapping_value > $column_count_value ) {
-				$mapping_valid = false;
-				break;
-			}
-		}
-
-		if ( ! $mapping_valid ) {
-			$message = '<div class="notice notice-error"><p>Vælg unikke CSV-kolonner inden for det angivne antal kolonner.</p></div>';
-		} elseif ( ! $file || ! isset( $file['tmp_name'] ) || ! is_uploaded_file( $file['tmp_name'] ) ) {
-			$message = '<div class="notice notice-error"><p>Kunne ikke finde filen. Prøv venligst igen.</p></div>';
-		} elseif ( ! empty( $file['error'] ) ) {
-			$message = '<div class="notice notice-error"><p>Der opstod en fejl under upload af filen.</p></div>';
+		if ( $column_count_raw < $default_column_count ) {
+			$message = '<div class="notice notice-error"><p>CSV Kolonne antal skal være mindst 4.</p></div>';
 		} else {
-			$added   = 0;
-			$skipped = 0;
-			$read_rows = 0;
-			$auto_created = array();
-			$auto_errors  = array();
-			$contents = file_get_contents( $file['tmp_name'] );
+			$mapping_values = array();
+			foreach ( $column_configs as $config ) {
+				$mapping_values[] = (int) $config['csv'];
+			}
+			$mapping_unique = array_unique( $mapping_values );
+			$mapping_valid  = count( $mapping_values ) === count( $mapping_unique );
 
-			if ( false === $contents ) {
-				$message = '<div class="notice notice-error"><p>Kunne ikke åbne CSV-filen.</p></div>';
-			} else {
-				if ( false !== strpos( $contents, '\\n' ) ) {
-					$contents = str_replace( '\\n', "\n", $contents );
+			foreach ( $mapping_values as $mapping_value ) {
+				if ( $mapping_value < 1 || $mapping_value > $column_count_value ) {
+					$mapping_valid = false;
+					break;
 				}
-				$contents = str_replace( array( "\r\n", "\r" ), "\n", $contents );
-				$lines    = array_filter( array_map( 'trim', explode( "\n", $contents ) ), 'strlen' );
+			}
 
-				$date_index    = $column_mapping_value['date'] - 1;
-				$text_index    = $column_mapping_value['text'] - 1;
-				$amount_index  = $column_mapping_value['amount'] - 1;
-				$balance_index = $column_mapping_value['balance'] - 1;
-				$max_index     = max( $date_index, $text_index, $amount_index, $balance_index );
+			if ( ! $mapping_valid ) {
+				$message = '<div class="notice notice-error"><p>Vælg unikke CSV-kolonner inden for det angivne antal kolonner.</p></div>';
+			} elseif ( ! $file || ! isset( $file['tmp_name'] ) || ! is_uploaded_file( $file['tmp_name'] ) ) {
+				$message = '<div class="notice notice-error"><p>Kunne ikke finde filen. Prøv venligst igen.</p></div>';
+			} elseif ( ! empty( $file['error'] ) ) {
+				$message = '<div class="notice notice-error"><p>Der opstod en fejl under upload af filen.</p></div>';
+			} else {
+				$added   = 0;
+				$skipped = 0;
+				$read_rows = 0;
+				$auto_created = array();
+				$auto_errors  = array();
+				$contents = file_get_contents( $file['tmp_name'] );
+
+				if ( false === $contents ) {
+					$message = '<div class="notice notice-error"><p>Kunne ikke åbne CSV-filen.</p></div>';
+				} else {
+					if ( false !== strpos( $contents, '\\n' ) ) {
+						$contents = str_replace( '\\n', "\n", $contents );
+					}
+					$contents = str_replace( array( "\r\n", "\r" ), "\n", $contents );
+					$lines    = array_filter( array_map( 'trim', explode( "\n", $contents ) ), 'strlen' );
+
+				$date_index    = $column_configs[1]['csv'] - 1;
+				$text_index    = $column_configs[2]['csv'] - 1;
+				$amount_index  = $column_configs[3]['csv'] - 1;
+				$balance_index = $column_configs[4]['csv'] - 1;
 				$delimiter     = 'tab' === $delimiter_value ? "\t" : $delimiter_value;
+				$parsed_rows   = array();
+				$validation_error = '';
 
-				foreach ( $lines as $line ) {
+				foreach ( $lines as $line_index => $line ) {
 					$trimmed_line = trim( $line );
 
 					if ( '' === $trimmed_line ) {
@@ -3465,6 +3551,17 @@ function sr_render_bank_statements_page() {
 						continue;
 					}
 
+					$line_number = $line_index + 1;
+					if ( count( $row ) !== $column_count_value ) {
+						$validation_error = sprintf(
+							'Linje %d har %d kolonner, forventede %d.',
+							$line_number,
+							count( $row ),
+							$column_count_value
+						);
+						break;
+					}
+
 					$header_check = array_map( 'trim', $row );
 					$header_date  = $header_check[ $date_index ] ?? '';
 					$header_date  = preg_replace( '/^\xEF\xBB\xBF/', '', $header_date );
@@ -3472,149 +3569,172 @@ function sr_render_bank_statements_page() {
 						continue;
 					}
 
-					if ( count( $row ) <= $max_index ) {
-						continue;
-					}
-
-					$read_rows++;
-					$date           = trim( (string) $row[ $date_index ] );
-					$text           = trim( (string) $row[ $text_index ] );
-					$amount         = sr_normalize_decimal_input( $row[ $amount_index ] );
-					$balance        = sr_normalize_decimal_input( $row[ $balance_index ] );
-
-					$hash_source = implode(
-						'|',
-						array(
-							$date,
-							$text,
-							(string) $amount,
-							(string) $balance,
-						)
-					);
-					$row_hash = hash( 'sha256', $hash_source );
-
-					$existing = $wpdb->get_var(
-						$wpdb->prepare(
-							"SELECT id FROM {$table_bank_statements} WHERE row_hash = %s",
-							$row_hash
-						)
-					);
-
-					if ( $existing ) {
-						$skipped++;
-						continue;
-					}
-
-					$inserted = $wpdb->insert(
-						$table_bank_statements,
-						array(
-							'Dato'        => $date,
-							'Tekst'       => $text,
-							'Beløb'       => $amount,
-							'Saldo'       => $balance,
-							'row_hash'    => $row_hash,
-							'created_at'  => sr_now(),
-						),
-						array( '%s', '%s', '%f', '%f', '%s', '%s' )
-					);
-
-					if ( false !== $inserted ) {
-						$added++;
-						$bank_statement_id = (int) $wpdb->insert_id;
-						$resident_ids = sr_get_resident_ids_by_text( $text );
-						if ( 1 === count( $resident_ids ) ) {
-							$resident_id = (int) $resident_ids[0];
-							$period      = sr_get_period_from_bank_statement_date( $date );
-
-							if ( ! $period ) {
-								$auto_errors[] = 'Kunne ikke aflæse datoen for auto-tilknytning: ' . $text;
-							} elseif ( sr_is_period_locked( $period['month'], $period['year'] ) ) {
-								$auto_errors[] = 'Perioden er låst for auto-tilknytning: ' . $text;
-							} else {
-								$existing_payment = $wpdb->get_var(
-									$wpdb->prepare(
-										"SELECT id FROM {$table_payments} WHERE bank_statement_id = %d",
-										$bank_statement_id
-									)
-								);
-								if ( ! $existing_payment ) {
-									$inserted_payment = $wpdb->insert(
-										$table_payments,
-										array(
-											'resident_id'       => $resident_id,
-											'bank_statement_id' => $bank_statement_id,
-											'period_month'      => $period['month'],
-											'period_year'       => $period['year'],
-											'amount'            => (float) $amount,
-											'status'            => 'verified',
-											'submitted_by'      => get_current_user_id(),
-											'submitted_at'      => sr_now(),
-											'verified_by'       => get_current_user_id(),
-											'verified_at'       => sr_now(),
-										),
-										array( '%d', '%d', '%d', '%d', '%f', '%s', '%d', '%s', '%d', '%s' )
-									);
-									if ( false !== $inserted_payment ) {
-										sr_log_action( 'create', 'payment', $wpdb->insert_id, 'Auto-tilknytning fra bankudtog' );
-										sr_log_action( 'verify', 'payment', $wpdb->insert_id, 'Indbetaling verificeret (auto)' );
-										sr_maybe_add_resident_text( $resident_id, $text );
-										$resident_info = $wpdb->get_row(
-											$wpdb->prepare(
-												"SELECT name, member_number FROM {$table_residents} WHERE id = %d",
-												$resident_id
-											)
-										);
-										$auto_created[] = array(
-											'resident_name'   => $resident_info->name ?? '',
-											'member_number'   => $resident_info->member_number ?? '',
-											'text'            => $text,
-											'amount'          => $amount,
-											'date'            => $date,
-										);
-									} else {
-										$auto_errors[] = 'Kunne ikke oprette auto-tilknyttet betaling: ' . $text;
-									}
-								}
-							}
-						} elseif ( count( $resident_ids ) > 1 ) {
-							$auto_errors[] = 'Flere beboere matcher teksten, auto-tilknytning sprunget over: ' . $text;
+					foreach ( $column_configs as $config ) {
+						$csv_index = (int) $config['csv'] - 1;
+						$value     = $row[ $csv_index ] ?? '';
+						if ( ! sr_is_valid_csv_value( $value, $config['type'], $config['expected'] ) ) {
+							$validation_error = sprintf(
+								'Linje %d: Kolonnen "%s" matcher ikke den forventede type (%s).',
+								$line_number,
+								$config['name'],
+								$config['type']
+							);
+							break 2;
 						}
 					}
+
+					$parsed_rows[] = array(
+						'date'    => trim( (string) $row[ $date_index ] ),
+						'text'    => trim( (string) $row[ $text_index ] ),
+						'amount'  => $row[ $amount_index ],
+						'balance' => $row[ $balance_index ],
+					);
 				}
 
-				$message = '<div class="notice notice-success"><p>' .
-					sprintf(
-						'Indlæsning fuldført. Læste %d rækker, tilføjede %d rækker, sprang %d rækker over (duplikater).',
+				if ( '' !== $validation_error ) {
+					$message = '<div class="notice notice-error"><p>' . esc_html( $validation_error ) . '</p></div>';
+				} else {
+					foreach ( $parsed_rows as $parsed_row ) {
+						$read_rows++;
+						$date    = trim( (string) $parsed_row['date'] );
+						$text    = trim( (string) $parsed_row['text'] );
+						$amount  = sr_normalize_decimal_input( $parsed_row['amount'] );
+						$balance = sr_normalize_decimal_input( $parsed_row['balance'] );
+
+						$hash_source = implode(
+							'|',
+							array(
+								$date,
+								$text,
+								(string) $amount,
+								(string) $balance,
+							)
+						);
+						$row_hash = hash( 'sha256', $hash_source );
+
+						$existing = $wpdb->get_var(
+							$wpdb->prepare(
+								"SELECT id FROM {$table_bank_statements} WHERE row_hash = %s",
+								$row_hash
+							)
+						);
+
+						if ( $existing ) {
+							$skipped++;
+							continue;
+						}
+
+						$inserted = $wpdb->insert(
+							$table_bank_statements,
+							array(
+								'Dato'        => $date,
+								'Tekst'       => $text,
+								'Beløb'       => $amount,
+								'Saldo'       => $balance,
+								'row_hash'    => $row_hash,
+								'created_at'  => sr_now(),
+							),
+							array( '%s', '%s', '%f', '%f', '%s', '%s' )
+						);
+
+						if ( false !== $inserted ) {
+							$added++;
+							$bank_statement_id = (int) $wpdb->insert_id;
+							$resident_ids = sr_get_resident_ids_by_text( $text );
+							if ( 1 === count( $resident_ids ) ) {
+								$resident_id = (int) $resident_ids[0];
+								$period      = sr_get_period_from_bank_statement_date( $date );
+
+								if ( ! $period ) {
+									$auto_errors[] = 'Kunne ikke aflæse datoen for auto-tilknytning: ' . $text;
+								} elseif ( sr_is_period_locked( $period['month'], $period['year'] ) ) {
+									$auto_errors[] = 'Perioden er låst for auto-tilknytning: ' . $text;
+								} else {
+									$existing_payment = $wpdb->get_var(
+										$wpdb->prepare(
+											"SELECT id FROM {$table_payments} WHERE bank_statement_id = %d",
+											$bank_statement_id
+										)
+									);
+									if ( ! $existing_payment ) {
+										$inserted_payment = $wpdb->insert(
+											$table_payments,
+											array(
+												'resident_id'       => $resident_id,
+												'bank_statement_id' => $bank_statement_id,
+												'period_month'      => $period['month'],
+												'period_year'       => $period['year'],
+												'amount'            => (float) $amount,
+												'status'            => 'verified',
+												'submitted_by'      => get_current_user_id(),
+												'submitted_at'      => sr_now(),
+												'verified_by'       => get_current_user_id(),
+												'verified_at'       => sr_now(),
+											),
+											array( '%d', '%d', '%d', '%d', '%f', '%s', '%d', '%s', '%d', '%s' )
+										);
+										if ( false !== $inserted_payment ) {
+											sr_log_action( 'create', 'payment', $wpdb->insert_id, 'Auto-tilknytning fra bankudtog' );
+											sr_log_action( 'verify', 'payment', $wpdb->insert_id, 'Indbetaling verificeret (auto)' );
+											sr_maybe_add_resident_text( $resident_id, $text );
+											$resident_info = $wpdb->get_row(
+												$wpdb->prepare(
+													"SELECT name, member_number FROM {$table_residents} WHERE id = %d",
+													$resident_id
+												)
+											);
+											$auto_created[] = array(
+												'resident_name'   => $resident_info->name ?? '',
+												'member_number'   => $resident_info->member_number ?? '',
+												'text'            => $text,
+												'amount'          => $amount,
+												'date'            => $date,
+											);
+										} else {
+											$auto_errors[] = 'Kunne ikke oprette auto-tilknyttet betaling: ' . $text;
+										}
+									}
+								}
+							} elseif ( count( $resident_ids ) > 1 ) {
+								$auto_errors[] = 'Flere beboere matcher teksten, auto-tilknytning sprunget over: ' . $text;
+							}
+						}
+					}
+
+					$message = '<div class="notice notice-success"><p>' .
+						sprintf(
+							'Indlæsning fuldført. Læste %d rækker, tilføjede %d rækker, sprang %d rækker over (duplikater).',
+							$read_rows,
+							$added,
+							$skipped
+						) .
+						'</p></div>';
+
+					if ( ! empty( $auto_created ) ) {
+						$list_items = array();
+						foreach ( $auto_created as $auto_row ) {
+							$label = trim( $auto_row['member_number'] . ' ' . $auto_row['resident_name'] );
+							$list_items[] = sprintf(
+								'%s (%s) - %s kr. - %s',
+								$label,
+								$auto_row['date'],
+								number_format( (float) $auto_row['amount'], 2, ',', '.' ),
+								$auto_row['text']
+							);
+						}
+						$message .= '<div class="notice notice-success"><p>Auto-tilknyttede indbetalinger:</p><ul><li>' . implode( '</li><li>', array_map( 'esc_html', $list_items ) ) . '</li></ul></div>';
+					}
+
+					if ( ! empty( $auto_errors ) ) {
+						$message .= '<div class="notice notice-error"><p>Auto-tilknytning kunne ikke gennemføres for følgende linjer:</p><ul><li>' . implode( '</li><li>', array_map( 'esc_html', $auto_errors ) ) . '</li></ul></div>';
+					}
+					$popup_message = sprintf(
+						"Indlæsning fuldført.\nLæste rækker: %d\nIndsatte rækker: %d\nSkippede rækker (duplikater): %d",
 						$read_rows,
 						$added,
 						$skipped
-					) .
-					'</p></div>';
-
-				if ( ! empty( $auto_created ) ) {
-					$list_items = array();
-					foreach ( $auto_created as $auto_row ) {
-						$label = trim( $auto_row['member_number'] . ' ' . $auto_row['resident_name'] );
-						$list_items[] = sprintf(
-							'%s (%s) - %s kr. - %s',
-							$label,
-							$auto_row['date'],
-							number_format( (float) $auto_row['amount'], 2, ',', '.' ),
-							$auto_row['text']
-						);
-					}
-					$message .= '<div class="notice notice-success"><p>Auto-tilknyttede indbetalinger:</p><ul><li>' . implode( '</li><li>', array_map( 'esc_html', $list_items ) ) . '</li></ul></div>';
+					);
 				}
-
-				if ( ! empty( $auto_errors ) ) {
-					$message .= '<div class="notice notice-error"><p>Auto-tilknytning kunne ikke gennemføres for følgende linjer:</p><ul><li>' . implode( '</li><li>', array_map( 'esc_html', $auto_errors ) ) . '</li></ul></div>';
-				}
-				$popup_message = sprintf(
-					"Indlæsning fuldført.\nLæste rækker: %d\nIndsatte rækker: %d\nSkippede rækker (duplikater): %d",
-					$read_rows,
-					$added,
-					$skipped
-				);
 			}
 		}
 	}
@@ -3636,10 +3756,25 @@ function sr_render_bank_statements_page() {
 		)
 	);
 	$column_options = range( 1, $column_count_value );
+	for ( $index = 1; $index <= $column_count_value; $index++ ) {
+		if ( empty( $column_configs[ $index ] ) ) {
+			$column_configs[ $index ] = $default_column_configs[ $index ] ?? array(
+				'name'     => 'Kolonne ' . $index,
+				'csv'      => $index,
+				'type'     => 'text',
+				'expected' => '',
+			);
+		}
+	}
 	$delimiter_options = array(
 		';'   => '; (semikolon)',
 		','   => ', (komma)',
 		'tab' => 'Tabulator',
+	);
+	$type_options = array(
+		'currency' => 'Valuta',
+		'date'     => 'Dato',
+		'text'     => 'Tekst',
 	);
 	?>
 	<div class="wrap">
@@ -3663,6 +3798,13 @@ function sr_render_bank_statements_page() {
 					</td>
 				</tr>
 				<tr>
+					<th scope="row">CSV Kolonne antal</th>
+					<td>
+						<input type="number" name="sr_csv_column_count" min="4" value="<?php echo esc_attr( $column_count_value ); ?>" required>
+						<p class="description">Angiv hvor mange kolonner CSV-filen indeholder (minimum 4).</p>
+					</td>
+				</tr>
+				<tr>
 					<th scope="row">Afgrænser</th>
 					<td>
 						<select name="sr_csv_delimiter">
@@ -3680,59 +3822,41 @@ function sr_render_bank_statements_page() {
 			<table class="widefat striped">
 				<thead>
 					<tr>
-						<th>Databasekolonne</th>
+						<th>Kolonnenavn</th>
 						<th>CSV-kolonne</th>
+						<th>Type</th>
+						<th>Forventet tekst</th>
 					</tr>
 				</thead>
 				<tbody>
-					<tr>
-						<td>Dato</td>
-						<td>
-							<select name="sr_csv_map_date" class="sr-csv-map" data-selected="<?php echo esc_attr( $column_mapping_value['date'] ); ?>" required>
-								<?php foreach ( $column_options as $option_value ) : ?>
-									<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $column_mapping_value['date'], $option_value ); ?>>
-										<?php echo esc_html( $option_value ); ?>
-									</option>
-								<?php endforeach; ?>
-							</select>
-						</td>
-					</tr>
-					<tr>
-						<td>Tekst</td>
-						<td>
-							<select name="sr_csv_map_text" class="sr-csv-map" data-selected="<?php echo esc_attr( $column_mapping_value['text'] ); ?>" required>
-								<?php foreach ( $column_options as $option_value ) : ?>
-									<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $column_mapping_value['text'], $option_value ); ?>>
-										<?php echo esc_html( $option_value ); ?>
-									</option>
-								<?php endforeach; ?>
-							</select>
-						</td>
-					</tr>
-					<tr>
-						<td>Beløb</td>
-						<td>
-							<select name="sr_csv_map_amount" class="sr-csv-map" data-selected="<?php echo esc_attr( $column_mapping_value['amount'] ); ?>" required>
-								<?php foreach ( $column_options as $option_value ) : ?>
-									<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $column_mapping_value['amount'], $option_value ); ?>>
-										<?php echo esc_html( $option_value ); ?>
-									</option>
-								<?php endforeach; ?>
-							</select>
-						</td>
-					</tr>
-					<tr>
-						<td>Saldo</td>
-						<td>
-							<select name="sr_csv_map_balance" class="sr-csv-map" data-selected="<?php echo esc_attr( $column_mapping_value['balance'] ); ?>" required>
-								<?php foreach ( $column_options as $option_value ) : ?>
-									<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $column_mapping_value['balance'], $option_value ); ?>>
-										<?php echo esc_html( $option_value ); ?>
-									</option>
-								<?php endforeach; ?>
-							</select>
-						</td>
-					</tr>
+					<?php foreach ( $column_configs as $index => $config ) : ?>
+						<tr>
+							<td>
+								<input type="text" name="sr_csv_column_name[<?php echo esc_attr( $index ); ?>]" value="<?php echo esc_attr( $config['name'] ); ?>" required>
+							</td>
+							<td>
+								<select name="sr_csv_column_map[<?php echo esc_attr( $index ); ?>]" class="sr-csv-map" required>
+									<?php foreach ( $column_options as $option_value ) : ?>
+										<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $config['csv'], $option_value ); ?>>
+											<?php echo esc_html( $option_value ); ?>
+										</option>
+									<?php endforeach; ?>
+								</select>
+							</td>
+							<td>
+								<select name="sr_csv_column_type[<?php echo esc_attr( $index ); ?>]" required>
+									<?php foreach ( $type_options as $type_value => $type_label ) : ?>
+										<option value="<?php echo esc_attr( $type_value ); ?>" <?php selected( $config['type'], $type_value ); ?>>
+											<?php echo esc_html( $type_label ); ?>
+										</option>
+									<?php endforeach; ?>
+								</select>
+							</td>
+							<td>
+								<input type="text" name="sr_csv_column_expected[<?php echo esc_attr( $index ); ?>]" value="<?php echo esc_attr( $config['expected'] ); ?>">
+							</td>
+						</tr>
+					<?php endforeach; ?>
 				</tbody>
 			</table>
 			<?php submit_button( 'Upload CSV', 'primary', 'sr_upload_bank_csv' ); ?>
