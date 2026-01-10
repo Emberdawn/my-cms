@@ -3866,7 +3866,11 @@ function sr_render_bank_statements_page() {
 								</select>
 							</td>
 							<td>
-								<input type="text" name="sr_csv_column_expected[<?php echo esc_attr( $index ); ?>]" value="<?php echo esc_attr( $config['expected'] ); ?>">
+								<?php if ( $index <= 4 ) : ?>
+									&mdash;
+								<?php else : ?>
+									<input type="text" name="sr_csv_column_expected[<?php echo esc_attr( $index ); ?>]" value="<?php echo esc_attr( $config['expected'] ); ?>">
+								<?php endif; ?>
 							</td>
 						</tr>
 					<?php endforeach; ?>
