@@ -19,6 +19,7 @@ define( 'SR_PLUGIN_SLUG', 'stromregnskab' );
 define( 'SR_CAPABILITY_ADMIN', 'manage_stromregnskab' );
 define( 'SR_CAPABILITY_RESIDENT', 'submit_energy_reports' );
 define( 'SR_CSVLINT_SETTINGS_OPTION', 'sr_csvlint_settings' );
+define( 'SR_BANK_STATEMENT_DELIMITER_OPTION', 'sr_bank_statement_delimiter' );
 
 /**
  * Activate plugin and create tables.
@@ -351,6 +352,23 @@ function sr_add_resident_texts_table() {
 add_action( 'admin_init', 'sr_add_resident_texts_table' );
 
 /**
+ * Get the last-used bank statement delimiter.
+ *
+ * @return string
+ */
+function sr_get_bank_statement_delimiter() {
+	$default_delimiter = ';';
+	$stored            = get_option( SR_BANK_STATEMENT_DELIMITER_OPTION, $default_delimiter );
+	$valid_delimiters  = array( ';', ',', 'tab' );
+
+	if ( ! in_array( $stored, $valid_delimiters, true ) ) {
+		return $default_delimiter;
+	}
+
+	return $stored;
+}
+
+/**
  * Default CSVLint settings.
  *
  * @return array<string,string>
@@ -360,7 +378,7 @@ function sr_get_csvlint_settings_defaults() {
 		'api_url'            => 'https://csvlint.io/api/validate',
 		'schema'             => '',
 		'encoding'           => '',
-		'delimiter'          => '',
+		'delimiter'          => sr_get_bank_statement_delimiter(),
 		'quote_char'         => '',
 		'escape_char'        => '',
 		'skip_initial_space' => '',
@@ -3669,7 +3687,7 @@ function sr_render_bank_statements_page() {
 		'amount'  => 3,
 		'balance' => 4,
 	);
-	$default_delimiter = ';';
+	$default_delimiter = sr_get_bank_statement_delimiter();
 	global $wpdb;
 	$table_bank_statements = $wpdb->prefix . 'sr_bank_statements';
 	$table_payments        = $wpdb->prefix . 'sr_payments';
@@ -3697,6 +3715,7 @@ function sr_render_bank_statements_page() {
 		);
 		$delimiter_value = sanitize_text_field( wp_unslash( $_POST['sr_csv_delimiter'] ?? $default_delimiter ) );
 		$delimiter_value = in_array( $delimiter_value, array( ';', ',', 'tab' ), true ) ? $delimiter_value : $default_delimiter;
+		update_option( SR_BANK_STATEMENT_DELIMITER_OPTION, $delimiter_value );
 
 		$mapping_values = array_values( $column_mapping_value );
 		$mapping_unique = array_unique( $mapping_values );
