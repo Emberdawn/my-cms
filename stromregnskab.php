@@ -404,6 +404,36 @@ function sr_get_csvlint_settings() {
 }
 
 /**
+ * Write CSVLint diagnostics to a log file in the uploads directory.
+ *
+ * @param string               $message Log message.
+ * @param array<string,mixed> $context Additional context data.
+ * @return void
+ */
+function sr_csvlint_log( $message, $context = array() ) {
+	$upload_dir = wp_upload_dir();
+	if ( empty( $upload_dir['basedir'] ) ) {
+		return;
+	}
+
+	$path = trailingslashit( $upload_dir['basedir'] ) . 'sr-csvlint.log';
+	$entry = array_merge(
+		array(
+			'timestamp' => current_time( 'mysql' ),
+			'message'   => (string) $message,
+		),
+		$context
+	);
+
+	$line = wp_json_encode( $entry );
+	if ( false === $line ) {
+		return;
+	}
+
+	@file_put_contents( $path, $line . PHP_EOL, FILE_APPEND | LOCK_EX );
+}
+
+/**
  * Run CSVLint validation for an uploaded CSV file.
  *
  * @param array<string,mixed> $file Uploaded file array.
@@ -428,11 +458,27 @@ function sr_run_csvlint_validation( $file, $settings ) {
 
 	$contents = file_get_contents( $file['tmp_name'] );
 	if ( false === $contents ) {
+		sr_csvlint_log(
+			'Kunne ikke indlæse CSV-indholdet.',
+			array(
+				'file_name' => $file['name'] ?? 'upload.csv',
+			)
+		);
 		return array(
 			'valid'   => false,
 			'message' => 'CSVLint kunne ikke indlæse CSV-indholdet.',
 		);
 	}
+
+	sr_csvlint_log(
+		'Starter CSVLint validering.',
+		array(
+			'api_url'   => $api_url,
+			'file_name' => $file['name'] ?? 'upload.csv',
+			'file_size' => strlen( $contents ),
+			'settings'  => $settings,
+		)
+	);
 
 	$boundary = wp_generate_password( 24, false, false );
 	$body     = '';
@@ -469,6 +515,12 @@ function sr_run_csvlint_validation( $file, $settings ) {
 	);
 
 	if ( is_wp_error( $response ) ) {
+		sr_csvlint_log(
+			'CSVLint HTTP fejl.',
+			array(
+				'error' => $response->get_error_message(),
+			)
+		);
 		return array(
 			'valid'   => false,
 			'message' => 'CSVLint-fejl: ' . $response->get_error_message(),
@@ -477,6 +529,12 @@ function sr_run_csvlint_validation( $file, $settings ) {
 
 	$body = wp_remote_retrieve_body( $response );
 	if ( '' === $body ) {
+		sr_csvlint_log(
+			'CSVLint tomt svar.',
+			array(
+				'status' => wp_remote_retrieve_response_code( $response ),
+			)
+		);
 		return array(
 			'valid'   => false,
 			'message' => 'CSVLint returnerede et tomt svar.',
@@ -485,6 +543,14 @@ function sr_run_csvlint_validation( $file, $settings ) {
 
 	$data = json_decode( $body, true );
 	if ( ! is_array( $data ) ) {
+		sr_csvlint_log(
+			'CSVLint ugyldigt svar.',
+			array(
+				'status'  => wp_remote_retrieve_response_code( $response ),
+				'headers' => wp_remote_retrieve_headers( $response ),
+				'body'    => substr( $body, 0, 2000 ),
+			)
+		);
 		return array(
 			'valid'   => false,
 			'message' => 'CSVLint returnerede et ugyldigt svar.',
