@@ -842,10 +842,7 @@ function sr_is_valid_csv_value( $value, $type, $expected_text = '' ) {
 	}
 
 	if ( 'text' === $type ) {
-		if ( '' !== $expected_text && $value !== $expected_text ) {
-			return false;
-		}
-		return true;
+		return $value === $expected_text;
 	}
 
 	return false;
@@ -3482,11 +3479,12 @@ function sr_render_bank_statements_page() {
 			$saved_csv = $default_config['csv'];
 		}
 
+		$safe_type = in_array( $saved_type, $allowed_types, true ) ? $saved_type : $default_config['type'];
 		$column_configs[ $index ] = array(
 			'name'     => $saved_name,
 			'csv'      => $saved_csv,
-			'type'     => in_array( $saved_type, $allowed_types, true ) ? $saved_type : $default_config['type'],
-			'expected' => $index <= 4 ? '' : $saved_expected,
+			'type'     => $safe_type,
+			'expected' => 'text' === $safe_type ? $saved_expected : '',
 		);
 	}
 
@@ -3507,11 +3505,12 @@ function sr_render_bank_statements_page() {
 				'type'     => 'text',
 				'expected' => '',
 			);
+			$type_value = in_array( $column_types[ $index ] ?? '', $allowed_types, true ) ? $column_types[ $index ] : $default_config['type'];
 			$column_configs[ $index ] = array(
 				'name'     => $column_names[ $index ] ?? $default_config['name'],
 				'csv'      => $column_maps[ $index ] ?? $default_config['csv'],
-				'type'     => in_array( $column_types[ $index ] ?? '', $allowed_types, true ) ? $column_types[ $index ] : $default_config['type'],
-				'expected' => $column_expected[ $index ] ?? $default_config['expected'],
+				'type'     => $type_value,
+				'expected' => 'text' === $type_value ? ( $column_expected[ $index ] ?? $default_config['expected'] ) : '',
 			);
 		}
 
@@ -3557,11 +3556,12 @@ function sr_render_bank_statements_page() {
 				'type'     => 'text',
 				'expected' => '',
 			);
+			$type_value = in_array( $column_types[ $index ] ?? '', $allowed_types, true ) ? $column_types[ $index ] : $default_config['type'];
 			$column_configs[ $index ] = array(
 				'name'     => $column_names[ $index ] ?? $default_config['name'],
 				'csv'      => $column_maps[ $index ] ?? $default_config['csv'],
-				'type'     => in_array( $column_types[ $index ] ?? '', $allowed_types, true ) ? $column_types[ $index ] : $default_config['type'],
-				'expected' => $column_expected[ $index ] ?? $default_config['expected'],
+				'type'     => $type_value,
+				'expected' => 'text' === $type_value ? ( $column_expected[ $index ] ?? $default_config['expected'] ) : '',
 			);
 		}
 		$delimiter_value = sanitize_text_field( wp_unslash( $_POST['sr_csv_delimiter'] ?? $default_delimiter ) );
@@ -3935,10 +3935,10 @@ function sr_render_bank_statements_page() {
 								</select>
 							</td>
 							<td>
-								<?php if ( $index <= 4 ) : ?>
+								<?php if ( 'text' !== $config['type'] ) : ?>
 									&mdash;
 								<?php else : ?>
-									<input type="text" name="sr_csv_column_expected[<?php echo esc_attr( $index ); ?>]" value="<?php echo esc_attr( $config['expected'] ); ?>">
+									<input type="text" name="sr_csv_column_expected[<?php echo esc_attr( $index ); ?>]" value="<?php echo esc_attr( $config['expected'] ); ?>" required>
 								<?php endif; ?>
 							</td>
 						</tr>
