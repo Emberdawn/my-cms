@@ -18,8 +18,6 @@ define( 'SR_PLUGIN_VERSION', '0.1.0' );
 define( 'SR_PLUGIN_SLUG', 'stromregnskab' );
 define( 'SR_CAPABILITY_ADMIN', 'manage_stromregnskab' );
 define( 'SR_CAPABILITY_RESIDENT', 'submit_energy_reports' );
-define( 'SR_CSVLINT_SETTINGS_OPTION', 'sr_csvlint_settings' );
-define( 'SR_BANK_STATEMENT_DELIMITER_OPTION', 'sr_bank_statement_delimiter' );
 
 /**
  * Activate plugin and create tables.
@@ -352,249 +350,6 @@ function sr_add_resident_texts_table() {
 add_action( 'admin_init', 'sr_add_resident_texts_table' );
 
 /**
- * Get the last-used bank statement delimiter.
- *
- * @return string
- */
-function sr_get_bank_statement_delimiter() {
-	$default_delimiter = ';';
-	$stored            = get_option( SR_BANK_STATEMENT_DELIMITER_OPTION, $default_delimiter );
-	$valid_delimiters  = array( ';', ',', 'tab' );
-
-	if ( ! in_array( $stored, $valid_delimiters, true ) ) {
-		return $default_delimiter;
-	}
-
-	return $stored;
-}
-
-/**
- * Default CSVLint settings.
- *
- * @return array<string,string>
- */
-function sr_get_csvlint_settings_defaults() {
-	return array(
-		'api_url'            => 'https://csvlint.io/api/validate',
-		'schema'             => '',
-		'encoding'           => '',
-		'delimiter'          => sr_get_bank_statement_delimiter(),
-		'quote_char'         => '',
-		'escape_char'        => '',
-		'skip_initial_space' => '',
-		'doublequote'        => '',
-		'lineterminator'     => '',
-		'header'             => '',
-	);
-}
-
-/**
- * Get CSVLint settings merged with defaults.
- *
- * @return array<string,string>
- */
-function sr_get_csvlint_settings() {
-	$defaults = sr_get_csvlint_settings_defaults();
-	$stored   = get_option( SR_CSVLINT_SETTINGS_OPTION, array() );
-	if ( ! is_array( $stored ) ) {
-		$stored = array();
-	}
-
-	return array_merge( $defaults, array_intersect_key( $stored, $defaults ) );
-}
-
-/**
- * Write CSVLint diagnostics to a log file in the uploads directory.
- *
- * @param string               $message Log message.
- * @param array<string,mixed> $context Additional context data.
- * @return void
- */
-function sr_csvlint_log( $message, $context = array() ) {
-	$upload_dir = wp_upload_dir();
-	if ( empty( $upload_dir['basedir'] ) ) {
-		return;
-	}
-
-	$path = trailingslashit( $upload_dir['basedir'] ) . 'sr-csvlint.log';
-	$entry = array_merge(
-		array(
-			'timestamp' => current_time( 'mysql' ),
-			'message'   => (string) $message,
-		),
-		$context
-	);
-
-	$line = wp_json_encode( $entry );
-	if ( false === $line ) {
-		return;
-	}
-
-	@file_put_contents( $path, $line . PHP_EOL, FILE_APPEND | LOCK_EX );
-}
-
-/**
- * Run CSVLint validation for an uploaded CSV file.
- *
- * @param array<string,mixed> $file Uploaded file array.
- * @param array<string,string> $settings CSVLint settings.
- * @return array{valid:bool,message:string}
- */
-function sr_run_csvlint_validation( $file, $settings ) {
-	$api_url = trim( $settings['api_url'] ?? '' );
-	if ( '' === $api_url ) {
-		return array(
-			'valid'   => false,
-			'message' => 'CSVLint API URL mangler. Udfyld den under CSVLint-indstillinger.',
-		);
-	}
-
-	if ( empty( $file['tmp_name'] ) || ! is_readable( $file['tmp_name'] ) ) {
-		return array(
-			'valid'   => false,
-			'message' => 'CSVLint kunne ikke læse den uploadede fil.',
-		);
-	}
-
-	$contents = file_get_contents( $file['tmp_name'] );
-	if ( false === $contents ) {
-		sr_csvlint_log(
-			'Kunne ikke indlæse CSV-indholdet.',
-			array(
-				'file_name' => $file['name'] ?? 'upload.csv',
-			)
-		);
-		return array(
-			'valid'   => false,
-			'message' => 'CSVLint kunne ikke indlæse CSV-indholdet.',
-		);
-	}
-
-	sr_csvlint_log(
-		'Starter CSVLint validering.',
-		array(
-			'api_url'   => $api_url,
-			'file_name' => $file['name'] ?? 'upload.csv',
-			'file_size' => strlen( $contents ),
-			'settings'  => $settings,
-		)
-	);
-
-	$boundary = wp_generate_password( 24, false, false );
-	$body     = '';
-
-	$body .= "--{$boundary}\r\n";
-	$body .= 'Content-Disposition: form-data; name="file"; filename="' . sanitize_file_name( $file['name'] ?? 'upload.csv' ) . "\"\r\n";
-	$body .= "Content-Type: text/csv\r\n\r\n";
-	$body .= $contents . "\r\n";
-
-	foreach ( $settings as $key => $value ) {
-		if ( 'api_url' === $key ) {
-			continue;
-		}
-		$value = trim( (string) $value );
-		if ( '' === $value ) {
-			continue;
-		}
-		$body .= "--{$boundary}\r\n";
-		$body .= 'Content-Disposition: form-data; name="' . sanitize_key( $key ) . "\"\r\n\r\n";
-		$body .= $value . "\r\n";
-	}
-
-	$body .= "--{$boundary}--\r\n";
-
-	$response = wp_remote_post(
-		$api_url,
-		array(
-			'timeout' => 20,
-			'headers' => array(
-				'Content-Type' => 'multipart/form-data; boundary=' . $boundary,
-			),
-			'body'    => $body,
-		)
-	);
-
-	if ( is_wp_error( $response ) ) {
-		sr_csvlint_log(
-			'CSVLint HTTP fejl.',
-			array(
-				'error' => $response->get_error_message(),
-			)
-		);
-		return array(
-			'valid'   => false,
-			'message' => 'CSVLint-fejl: ' . $response->get_error_message(),
-		);
-	}
-
-	$body = wp_remote_retrieve_body( $response );
-	if ( '' === $body ) {
-		sr_csvlint_log(
-			'CSVLint tomt svar.',
-			array(
-				'status' => wp_remote_retrieve_response_code( $response ),
-			)
-		);
-		return array(
-			'valid'   => false,
-			'message' => 'CSVLint returnerede et tomt svar.',
-		);
-	}
-
-	$data = json_decode( $body, true );
-	if ( ! is_array( $data ) ) {
-		sr_csvlint_log(
-			'CSVLint ugyldigt svar.',
-			array(
-				'status'  => wp_remote_retrieve_response_code( $response ),
-				'headers' => wp_remote_retrieve_headers( $response ),
-				'body'    => substr( $body, 0, 2000 ),
-			)
-		);
-		return array(
-			'valid'   => false,
-			'message' => 'CSVLint returnerede et ugyldigt svar.',
-		);
-	}
-
-	$valid = null;
-	if ( isset( $data['validation']['valid'] ) ) {
-		$valid = (bool) $data['validation']['valid'];
-	} elseif ( isset( $data['valid'] ) ) {
-		$valid = (bool) $data['valid'];
-	}
-
-	$errors = array();
-	if ( isset( $data['validation']['errors'] ) && is_array( $data['validation']['errors'] ) ) {
-		$errors = $data['validation']['errors'];
-	} elseif ( isset( $data['errors'] ) && is_array( $data['errors'] ) ) {
-		$errors = $data['errors'];
-	}
-
-	if ( false === $valid || ! empty( $errors ) ) {
-		$messages = array();
-		foreach ( $errors as $error ) {
-			if ( is_string( $error ) ) {
-				$messages[] = $error;
-			} elseif ( is_array( $error ) && isset( $error['message'] ) ) {
-				$messages[] = (string) $error['message'];
-			}
-		}
-		$detail = ! empty( $messages ) ? implode( ' | ', array_map( 'sanitize_text_field', $messages ) ) : 'CSVLint fandt fejl i filen.';
-
-		return array(
-			'valid'   => false,
-			'message' => 'CSVLint fejl: ' . $detail,
-		);
-	}
-
-	return array(
-		'valid'   => true,
-		'message' => 'CSVLint: Filen er valideret uden fejl.',
-	);
-}
-
-/**
  * Add plugin menu items.
  */
 function sr_register_admin_menu() {
@@ -619,7 +374,6 @@ function sr_register_admin_menu() {
 	add_submenu_page( SR_PLUGIN_SLUG, 'CSV-eksport', 'CSV-eksport', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-export', 'sr_render_export_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Bankudtog', 'Bankudtog', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-bank-statements', 'sr_render_bank_statements_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Tilknyt betalinger', 'Tilknyt betalinger', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-bank-link-payments', 'sr_render_bank_statement_link_page' );
-	add_submenu_page( SR_PLUGIN_SLUG, 'CSVlint', 'CSVlint', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-csvlint', 'sr_render_csvlint_settings_page' );
 }
 add_action( 'admin_menu', 'sr_register_admin_menu' );
 
@@ -3613,132 +3367,6 @@ function sr_render_locks_page() {
 }
 
 /**
- * Render CSVLint settings page.
- */
-function sr_render_csvlint_settings_page() {
-	if ( ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
-		return;
-	}
-
-	$defaults = sr_get_csvlint_settings_defaults();
-	$settings = sr_get_csvlint_settings();
-	$message  = '';
-
-	if ( isset( $_POST['sr_save_csvlint_settings'] ) ) {
-		check_admin_referer( 'sr_save_csvlint_settings_action', 'sr_save_csvlint_settings_nonce' );
-		$updated = array();
-		foreach ( $defaults as $key => $default_value ) {
-			if ( 'api_url' === $key ) {
-				$updated[ $key ] = esc_url_raw( wp_unslash( $_POST[ $key ] ?? $default_value ) );
-				continue;
-			}
-			$updated[ $key ] = sanitize_text_field( wp_unslash( $_POST[ $key ] ?? '' ) );
-		}
-		update_option( SR_CSVLINT_SETTINGS_OPTION, $updated );
-		$settings = sr_get_csvlint_settings();
-		$message  = '<div class="notice notice-success"><p>CSVLint-indstillingerne er opdateret.</p></div>';
-	}
-
-	$boolean_options = array(
-		''      => 'Standard',
-		'true'  => 'True',
-		'false' => 'False',
-	);
-	?>
-	<div class="wrap">
-		<h1>CSVlint</h1>
-		<?php echo wp_kses_post( $message ); ?>
-		<form method="post">
-			<?php wp_nonce_field( 'sr_save_csvlint_settings_action', 'sr_save_csvlint_settings_nonce' ); ?>
-			<table class="form-table">
-				<tr>
-					<th scope="row"><label for="sr-csvlint-api-url">API URL</label></th>
-					<td>
-						<input type="url" class="regular-text" id="sr-csvlint-api-url" name="api_url" value="<?php echo esc_attr( $settings['api_url'] ); ?>">
-						<p class="description">Standard er https://csvlint.io/api/validate.</p>
-					</td>
-				</tr>
-				<tr>
-					<th scope="row"><label for="sr-csvlint-schema">Schema</label></th>
-					<td>
-						<input type="text" class="regular-text" id="sr-csvlint-schema" name="schema" value="<?php echo esc_attr( $settings['schema'] ); ?>">
-						<p class="description">Angiv schema URL eller identifikator.</p>
-					</td>
-				</tr>
-				<tr>
-					<th scope="row"><label for="sr-csvlint-encoding">Encoding</label></th>
-					<td>
-						<input type="text" class="regular-text" id="sr-csvlint-encoding" name="encoding" value="<?php echo esc_attr( $settings['encoding'] ); ?>">
-					</td>
-				</tr>
-				<tr>
-					<th scope="row"><label for="sr-csvlint-delimiter">Delimiter</label></th>
-					<td>
-						<input type="text" class="regular-text" id="sr-csvlint-delimiter" name="delimiter" value="<?php echo esc_attr( $settings['delimiter'] ); ?>">
-					</td>
-				</tr>
-				<tr>
-					<th scope="row"><label for="sr-csvlint-quote">Quote char</label></th>
-					<td>
-						<input type="text" class="regular-text" id="sr-csvlint-quote" name="quote_char" value="<?php echo esc_attr( $settings['quote_char'] ); ?>">
-					</td>
-				</tr>
-				<tr>
-					<th scope="row"><label for="sr-csvlint-escape">Escape char</label></th>
-					<td>
-						<input type="text" class="regular-text" id="sr-csvlint-escape" name="escape_char" value="<?php echo esc_attr( $settings['escape_char'] ); ?>">
-					</td>
-				</tr>
-				<tr>
-					<th scope="row"><label for="sr-csvlint-skip">Skip initial space</label></th>
-					<td>
-						<select id="sr-csvlint-skip" name="skip_initial_space">
-							<?php foreach ( $boolean_options as $option_value => $option_label ) : ?>
-								<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $settings['skip_initial_space'], $option_value ); ?>>
-									<?php echo esc_html( $option_label ); ?>
-								</option>
-							<?php endforeach; ?>
-						</select>
-					</td>
-				</tr>
-				<tr>
-					<th scope="row"><label for="sr-csvlint-doublequote">Doublequote</label></th>
-					<td>
-						<select id="sr-csvlint-doublequote" name="doublequote">
-							<?php foreach ( $boolean_options as $option_value => $option_label ) : ?>
-								<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $settings['doublequote'], $option_value ); ?>>
-									<?php echo esc_html( $option_label ); ?>
-								</option>
-							<?php endforeach; ?>
-						</select>
-					</td>
-				</tr>
-				<tr>
-					<th scope="row"><label for="sr-csvlint-lineterminator">Lineterminator</label></th>
-					<td>
-						<input type="text" class="regular-text" id="sr-csvlint-lineterminator" name="lineterminator" value="<?php echo esc_attr( $settings['lineterminator'] ); ?>">
-					</td>
-				</tr>
-				<tr>
-					<th scope="row"><label for="sr-csvlint-header">Header</label></th>
-					<td>
-						<select id="sr-csvlint-header" name="header">
-							<?php foreach ( $boolean_options as $option_value => $option_label ) : ?>
-								<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $settings['header'], $option_value ); ?>>
-									<?php echo esc_html( $option_label ); ?>
-								</option>
-							<?php endforeach; ?>
-						</select>
-					</td>
-				</tr>
-			</table>
-			<?php submit_button( 'Gem CSVLint-indstillinger', 'primary', 'sr_save_csvlint_settings' ); ?>
-		</form>
-	</div>
-	<?php
-}
-
-/**
  * Render bank statements upload page.
  */
 function sr_render_bank_statements_page() {
@@ -3753,7 +3381,7 @@ function sr_render_bank_statements_page() {
 		'amount'  => 3,
 		'balance' => 4,
 	);
-	$default_delimiter = sr_get_bank_statement_delimiter();
+	$default_delimiter = ';';
 	global $wpdb;
 	$table_bank_statements = $wpdb->prefix . 'sr_bank_statements';
 	$table_payments        = $wpdb->prefix . 'sr_payments';
@@ -3761,14 +3389,10 @@ function sr_render_bank_statements_page() {
 	$per_page              = 20;
 	$current_page          = sr_get_paged_param( 'sr_page' );
 	$message               = '';
-	$csvlint_notice        = '';
 	$popup_message         = '';
-	$upload_feedback_lines = array();
 	$column_count_value    = $default_column_count;
 	$column_mapping_value  = $default_mapping;
 	$delimiter_value       = $default_delimiter;
-	$csvlint_settings      = sr_get_csvlint_settings();
-	$csvlint_checked       = ! empty( $_POST['sr_csvlint_enabled'] );
 
 	if ( isset( $_POST['sr_upload_bank_csv'] ) ) {
 		check_admin_referer( 'sr_upload_bank_csv_action', 'sr_upload_bank_csv_nonce' );
@@ -3782,7 +3406,6 @@ function sr_render_bank_statements_page() {
 		);
 		$delimiter_value = sanitize_text_field( wp_unslash( $_POST['sr_csv_delimiter'] ?? $default_delimiter ) );
 		$delimiter_value = in_array( $delimiter_value, array( ';', ',', 'tab' ), true ) ? $delimiter_value : $default_delimiter;
-		update_option( SR_BANK_STATEMENT_DELIMITER_OPTION, $delimiter_value );
 
 		$mapping_values = array_values( $column_mapping_value );
 		$mapping_unique = array_unique( $mapping_values );
@@ -3796,28 +3419,12 @@ function sr_render_bank_statements_page() {
 		}
 
 		if ( ! $mapping_valid ) {
-			$message                 = '<div class="notice notice-error"><p>Vælg unikke CSV-kolonner inden for det angivne antal kolonner.</p></div>';
-			$upload_feedback_lines[] = 'Fejl: Vælg unikke CSV-kolonner inden for det angivne antal kolonner.';
+			$message = '<div class="notice notice-error"><p>Vælg unikke CSV-kolonner inden for det angivne antal kolonner.</p></div>';
 		} elseif ( ! $file || ! isset( $file['tmp_name'] ) || ! is_uploaded_file( $file['tmp_name'] ) ) {
-			$message                 = '<div class="notice notice-error"><p>Kunne ikke finde filen. Prøv venligst igen.</p></div>';
-			$upload_feedback_lines[] = 'Fejl: Kunne ikke finde filen. Prøv venligst igen.';
+			$message = '<div class="notice notice-error"><p>Kunne ikke finde filen. Prøv venligst igen.</p></div>';
 		} elseif ( ! empty( $file['error'] ) ) {
-			$message                 = '<div class="notice notice-error"><p>Der opstod en fejl under upload af filen.</p></div>';
-			$upload_feedback_lines[] = 'Fejl: Der opstod en fejl under upload af filen.';
+			$message = '<div class="notice notice-error"><p>Der opstod en fejl under upload af filen.</p></div>';
 		} else {
-			if ( $csvlint_checked ) {
-				$validation = sr_run_csvlint_validation( $file, $csvlint_settings );
-				if ( ! $validation['valid'] ) {
-					$message                 = '<div class="notice notice-error"><p>' . esc_html( $validation['message'] ) . '</p></div>';
-					$upload_feedback_lines[] = 'CSVLint fejl: ' . $validation['message'];
-				} else {
-					$csvlint_notice           = '<div class="notice notice-info"><p>' . esc_html( $validation['message'] ) . '</p></div>';
-					$upload_feedback_lines[]  = $validation['message'];
-				}
-			}
-		}
-
-		if ( '' === $message || false === strpos( $message, 'notice-error' ) ) {
 			$added   = 0;
 			$skipped = 0;
 			$read_rows = 0;
@@ -3826,8 +3433,7 @@ function sr_render_bank_statements_page() {
 			$contents = file_get_contents( $file['tmp_name'] );
 
 			if ( false === $contents ) {
-				$message                 = '<div class="notice notice-error"><p>Kunne ikke åbne CSV-filen.</p></div>';
-				$upload_feedback_lines[] = 'Fejl: Kunne ikke åbne CSV-filen.';
+				$message = '<div class="notice notice-error"><p>Kunne ikke åbne CSV-filen.</p></div>';
 			} else {
 				if ( false !== strpos( $contents, '\\n' ) ) {
 					$contents = str_replace( '\\n', "\n", $contents );
@@ -3976,12 +3582,6 @@ function sr_render_bank_statements_page() {
 					}
 				}
 
-				$summary_line = sprintf(
-					'Indlæsning fuldført. Læste %d rækker, tilføjede %d rækker, sprang %d rækker over (duplikater).',
-					$read_rows,
-					$added,
-					$skipped
-				);
 				$message = '<div class="notice notice-success"><p>' .
 					sprintf(
 						'Indlæsning fuldført. Læste %d rækker, tilføjede %d rækker, sprang %d rækker over (duplikater).',
@@ -3990,34 +3590,23 @@ function sr_render_bank_statements_page() {
 						$skipped
 					) .
 					'</p></div>';
-				$upload_feedback_lines[] = $summary_line;
-				if ( '' !== $csvlint_notice ) {
-					$message = $csvlint_notice . $message;
-				}
 
 				if ( ! empty( $auto_created ) ) {
-					$upload_feedback_lines[] = 'Auto-tilknyttede indbetalinger:';
 					$list_items = array();
 					foreach ( $auto_created as $auto_row ) {
 						$label = trim( $auto_row['member_number'] . ' ' . $auto_row['resident_name'] );
-						$created_item = sprintf(
+						$list_items[] = sprintf(
 							'%s (%s) - %s kr. - %s',
 							$label,
 							$auto_row['date'],
 							number_format( (float) $auto_row['amount'], 2, ',', '.' ),
 							$auto_row['text']
 						);
-						$list_items[]            = $created_item;
-						$upload_feedback_lines[] = $created_item;
 					}
 					$message .= '<div class="notice notice-success"><p>Auto-tilknyttede indbetalinger:</p><ul><li>' . implode( '</li><li>', array_map( 'esc_html', $list_items ) ) . '</li></ul></div>';
 				}
 
 				if ( ! empty( $auto_errors ) ) {
-					$upload_feedback_lines[] = 'Auto-tilknytning kunne ikke gennemføres for følgende linjer:';
-					foreach ( $auto_errors as $auto_error ) {
-						$upload_feedback_lines[] = $auto_error;
-					}
 					$message .= '<div class="notice notice-error"><p>Auto-tilknytning kunne ikke gennemføres for følgende linjer:</p><ul><li>' . implode( '</li><li>', array_map( 'esc_html', $auto_errors ) ) . '</li></ul></div>';
 				}
 				$popup_message = sprintf(
@@ -4065,31 +3654,6 @@ function sr_render_bank_statements_page() {
 		<?php endif; ?>
 		<form method="post" enctype="multipart/form-data">
 			<?php wp_nonce_field( 'sr_upload_bank_csv_action', 'sr_upload_bank_csv_nonce' ); ?>
-			<style>
-				.sr-upload-actions {
-					display: flex;
-					align-items: center;
-					gap: 16px;
-				}
-				.sr-csvlint-toggle {
-					display: inline-flex;
-					align-items: center;
-					gap: 8px;
-				}
-				.sr-csvlint-badge img {
-					height: 24px;
-					width: auto;
-					vertical-align: middle;
-				}
-				.sr-upload-feedback {
-					margin-top: 12px;
-					max-width: 640px;
-				}
-				.sr-upload-feedback textarea {
-					min-height: 160px;
-					width: 100%;
-				}
-			</style>
 			<table class="form-table">
 				<tr>
 					<th scope="row">CSV-fil</th>
@@ -4171,22 +3735,7 @@ function sr_render_bank_statements_page() {
 					</tr>
 				</tbody>
 			</table>
-			<div class="sr-upload-actions">
-				<?php echo submit_button( 'Upload CSV', 'primary', 'sr_upload_bank_csv', false ); ?>
-				<label class="sr-csvlint-toggle">
-					<input type="checkbox" name="sr_csvlint_enabled" value="1" <?php checked( $csvlint_checked, true ); ?>>
-					<span>CSVLint</span>
-				</label>
-				<a class="sr-csvlint-badge" href="https://csvlint.io/" target="_blank" rel="noopener noreferrer">
-					<img src="https://csvlint.io/images/csvlint-badge.png" alt="CSVLint badge">
-				</a>
-			</div>
-			<?php if ( ! empty( $upload_feedback_lines ) ) : ?>
-				<div class="sr-upload-feedback">
-					<label for="sr-upload-feedback">Status</label>
-					<textarea id="sr-upload-feedback" class="large-text code" readonly><?php echo esc_textarea( implode( "\n", $upload_feedback_lines ) ); ?></textarea>
-				</div>
-			<?php endif; ?>
+			<?php submit_button( 'Upload CSV', 'primary', 'sr_upload_bank_csv' ); ?>
 		</form>
 
 		<h2>Importerede banklinjer</h2>
