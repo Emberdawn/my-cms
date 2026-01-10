@@ -3738,6 +3738,7 @@ function sr_render_bank_statements_page() {
 			}
 		}
 	}
+}
 
 	$total_items = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table_bank_statements}" );
 	$total_pages = (int) max( 1, ceil( $total_items / $per_page ) );
