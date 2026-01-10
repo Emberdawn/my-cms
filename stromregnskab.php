@@ -3374,6 +3374,13 @@ function sr_render_bank_statements_page() {
 		return;
 	}
 
+	$default_column_count = 4;
+	$default_mapping = array(
+		'date'    => 1,
+		'text'    => 2,
+		'amount'  => 3,
+		'balance' => 4,
+	);
 	global $wpdb;
 	$table_bank_statements = $wpdb->prefix . 'sr_bank_statements';
 	$table_payments        = $wpdb->prefix . 'sr_payments';
@@ -3382,12 +3389,38 @@ function sr_render_bank_statements_page() {
 	$current_page          = sr_get_paged_param( 'sr_page' );
 	$message               = '';
 	$popup_message         = '';
+	$column_count_value    = $default_column_count;
+	$column_mapping_value  = $default_mapping;
 
 	if ( isset( $_POST['sr_upload_bank_csv'] ) ) {
 		check_admin_referer( 'sr_upload_bank_csv_action', 'sr_upload_bank_csv_nonce' );
 		$file = $_FILES['sr_bank_csv'] ?? null;
+		$column_count_value = absint( $_POST['sr_csv_columns_count'] ?? $default_column_count );
+		if ( $column_count_value < 1 ) {
+			$column_count_value = $default_column_count;
+		}
 
-		if ( ! $file || ! isset( $file['tmp_name'] ) || ! is_uploaded_file( $file['tmp_name'] ) ) {
+		$column_mapping_value = array(
+			'date'    => absint( $_POST['sr_csv_map_date'] ?? $default_mapping['date'] ),
+			'text'    => absint( $_POST['sr_csv_map_text'] ?? $default_mapping['text'] ),
+			'amount'  => absint( $_POST['sr_csv_map_amount'] ?? $default_mapping['amount'] ),
+			'balance' => absint( $_POST['sr_csv_map_balance'] ?? $default_mapping['balance'] ),
+		);
+
+		$mapping_values = array_values( $column_mapping_value );
+		$mapping_unique = array_unique( $mapping_values );
+		$mapping_valid  = count( $mapping_values ) === count( $mapping_unique );
+
+		foreach ( $mapping_values as $mapping_value ) {
+			if ( $mapping_value < 1 || $mapping_value > $column_count_value ) {
+				$mapping_valid = false;
+				break;
+			}
+		}
+
+		if ( ! $mapping_valid ) {
+			$message = '<div class="notice notice-error"><p>Vælg unikke CSV-kolonner inden for det angivne antal kolonner.</p></div>';
+		} elseif ( ! $file || ! isset( $file['tmp_name'] ) || ! is_uploaded_file( $file['tmp_name'] ) ) {
 			$message = '<div class="notice notice-error"><p>Kunne ikke finde filen. Prøv venligst igen.</p></div>';
 		} elseif ( ! empty( $file['error'] ) ) {
 			$message = '<div class="notice notice-error"><p>Der opstod en fejl under upload af filen.</p></div>';
@@ -3408,6 +3441,12 @@ function sr_render_bank_statements_page() {
 				$contents = str_replace( array( "\r\n", "\r" ), "\n", $contents );
 				$lines    = array_filter( array_map( 'trim', explode( "\n", $contents ) ), 'strlen' );
 
+				$date_index    = $column_mapping_value['date'] - 1;
+				$text_index    = $column_mapping_value['text'] - 1;
+				$amount_index  = $column_mapping_value['amount'] - 1;
+				$balance_index = $column_mapping_value['balance'] - 1;
+				$max_index     = max( $date_index, $text_index, $amount_index, $balance_index );
+
 				foreach ( $lines as $line ) {
 					$trimmed_line = trim( $line );
 
@@ -3426,21 +3465,21 @@ function sr_render_bank_statements_page() {
 					}
 
 					$header_check = array_map( 'trim', $row );
-					$header_first = $header_check[0] ?? '';
-					$header_first = preg_replace( '/^\xEF\xBB\xBF/', '', $header_first );
-					if ( '' !== $header_first && 'dato' === strtolower( $header_first ) ) {
+					$header_date  = $header_check[ $date_index ] ?? '';
+					$header_date  = preg_replace( '/^\xEF\xBB\xBF/', '', $header_date );
+					if ( '' !== $header_date && 'dato' === strtolower( $header_date ) ) {
 						continue;
 					}
 
-					if ( count( $row ) < 4 ) {
+					if ( count( $row ) <= $max_index ) {
 						continue;
 					}
 
 					$read_rows++;
-					$date           = trim( (string) $row[0] );
-					$text           = trim( (string) $row[1] );
-					$amount         = sr_normalize_decimal_input( $row[2] );
-					$balance        = sr_normalize_decimal_input( $row[3] );
+					$date           = trim( (string) $row[ $date_index ] );
+					$text           = trim( (string) $row[ $text_index ] );
+					$amount         = sr_normalize_decimal_input( $row[ $amount_index ] );
+					$balance        = sr_normalize_decimal_input( $row[ $balance_index ] );
 
 					$hash_source = implode(
 						'|',
@@ -3595,6 +3634,7 @@ function sr_render_bank_statements_page() {
 			$offset
 		)
 	);
+	$column_options = range( 1, $column_count_value );
 	?>
 	<div class="wrap">
 		<h1>Bankudtog</h1>
@@ -3613,12 +3653,126 @@ function sr_render_bank_statements_page() {
 					<th scope="row">CSV-fil</th>
 					<td>
 						<input type="file" name="sr_bank_csv" accept=".csv,text/csv" required>
-						<p class="description">CSV-format: Dato;Tekst;Beløb;Saldo</p>
+						<p class="description">CSV-filen bruges sammen med kolonnemappingen nedenfor.</p>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row">Antal kolonner</th>
+					<td>
+						<input type="number" id="sr_csv_columns_count" name="sr_csv_columns_count" min="1" value="<?php echo esc_attr( $column_count_value ); ?>" required>
+						<p class="description">Angiver hvor mange CSV-kolonner der er i filen.</p>
 					</td>
 				</tr>
 			</table>
+			<h2>Kolonnemapping</h2>
+			<table class="widefat striped">
+				<thead>
+					<tr>
+						<th>Databasekolonne</th>
+						<th>CSV-kolonne</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td>Dato</td>
+						<td>
+							<select name="sr_csv_map_date" class="sr-csv-map" data-selected="<?php echo esc_attr( $column_mapping_value['date'] ); ?>" required>
+								<?php foreach ( $column_options as $option_value ) : ?>
+									<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $column_mapping_value['date'], $option_value ); ?>>
+										<?php echo esc_html( $option_value ); ?>
+									</option>
+								<?php endforeach; ?>
+							</select>
+						</td>
+					</tr>
+					<tr>
+						<td>Tekst</td>
+						<td>
+							<select name="sr_csv_map_text" class="sr-csv-map" data-selected="<?php echo esc_attr( $column_mapping_value['text'] ); ?>" required>
+								<?php foreach ( $column_options as $option_value ) : ?>
+									<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $column_mapping_value['text'], $option_value ); ?>>
+										<?php echo esc_html( $option_value ); ?>
+									</option>
+								<?php endforeach; ?>
+							</select>
+						</td>
+					</tr>
+					<tr>
+						<td>Beløb</td>
+						<td>
+							<select name="sr_csv_map_amount" class="sr-csv-map" data-selected="<?php echo esc_attr( $column_mapping_value['amount'] ); ?>" required>
+								<?php foreach ( $column_options as $option_value ) : ?>
+									<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $column_mapping_value['amount'], $option_value ); ?>>
+										<?php echo esc_html( $option_value ); ?>
+									</option>
+								<?php endforeach; ?>
+							</select>
+						</td>
+					</tr>
+					<tr>
+						<td>Saldo</td>
+						<td>
+							<select name="sr_csv_map_balance" class="sr-csv-map" data-selected="<?php echo esc_attr( $column_mapping_value['balance'] ); ?>" required>
+								<?php foreach ( $column_options as $option_value ) : ?>
+									<option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $column_mapping_value['balance'], $option_value ); ?>>
+										<?php echo esc_html( $option_value ); ?>
+									</option>
+								<?php endforeach; ?>
+							</select>
+						</td>
+					</tr>
+				</tbody>
+			</table>
 			<?php submit_button( 'Upload CSV', 'primary', 'sr_upload_bank_csv' ); ?>
 		</form>
+		<script>
+			(function() {
+				const columnInput = document.getElementById('sr_csv_columns_count');
+				const selects = Array.from(document.querySelectorAll('.sr-csv-map'));
+
+				if (!columnInput || selects.length === 0) {
+					return;
+				}
+
+				const buildOptions = () => {
+					const columnCount = Math.max(1, parseInt(columnInput.value, 10) || 1);
+					const selectedValues = selects
+						.map((select) => select.value)
+						.filter((value) => value !== '');
+
+					selects.forEach((select) => {
+						const currentValue = select.value || select.dataset.selected || '';
+						const usedByOthers = selectedValues.filter((value) => value !== currentValue);
+						select.innerHTML = '';
+
+						const placeholder = document.createElement('option');
+						placeholder.value = '';
+						placeholder.textContent = 'Vælg kolonne';
+						select.appendChild(placeholder);
+
+						for (let i = 1; i <= columnCount; i += 1) {
+							const value = String(i);
+							if (usedByOthers.includes(value)) {
+								continue;
+							}
+							const option = document.createElement('option');
+							option.value = value;
+							option.textContent = value;
+							if (value === currentValue) {
+								option.selected = true;
+							}
+							select.appendChild(option);
+						}
+					});
+				};
+
+				selects.forEach((select) => {
+					select.addEventListener('change', buildOptions);
+				});
+				columnInput.addEventListener('input', buildOptions);
+				buildOptions();
+			}());
+		</script>
 
 		<h2>Importerede banklinjer</h2>
 		<table class="widefat striped">
