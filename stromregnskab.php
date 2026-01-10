@@ -371,6 +371,7 @@ function sr_register_admin_menu() {
 	add_submenu_page( SR_PLUGIN_SLUG, 'Kontotekst', 'Kontotekst', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-account-text', 'sr_render_account_text_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Strømpriser', 'Strømpriser', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-prices', 'sr_render_prices_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Periodelåsning', 'Periodelåsning', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-locks', 'sr_render_locks_page' );
+	add_submenu_page( SR_PLUGIN_SLUG, 'CSV-indstillinger', 'CSV-indstillinger', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-csv-settings', 'sr_render_csv_settings_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'CSV-eksport', 'CSV-eksport', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-export', 'sr_render_export_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Bankudtog', 'Bankudtog', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-bank-statements', 'sr_render_bank_statements_page' );
 	add_submenu_page( SR_PLUGIN_SLUG, 'Tilknyt betalinger', 'Tilknyt betalinger', SR_CAPABILITY_ADMIN, SR_PLUGIN_SLUG . '-bank-link-payments', 'sr_render_bank_statement_link_page' );
@@ -398,6 +399,133 @@ function sr_get_paged_param( $key ) {
 		$page = 1;
 	}
 	return $page;
+}
+
+/**
+ * Get CSVLint settings with defaults.
+ *
+ * @return array{enabled:int,schema_url:string,delimiter:string}
+ */
+function sr_get_csvlint_settings() {
+	$defaults = array(
+		'enabled'    => 0,
+		'schema_url' => '',
+		'delimiter'  => ';',
+	);
+	$settings = get_option( 'sr_csvlint_settings', array() );
+	if ( ! is_array( $settings ) ) {
+		$settings = array();
+	}
+	$settings = wp_parse_args( $settings, $defaults );
+	$settings['enabled']    = ! empty( $settings['enabled'] ) ? 1 : 0;
+	$settings['schema_url'] = trim( (string) $settings['schema_url'] );
+	$settings['delimiter']  = (string) ( $settings['delimiter'] ?: ';' );
+
+	return $settings;
+}
+
+/**
+ * Validate CSV with CSVLint.
+ *
+ * @param string $file_path CSV file path.
+ * @param string $file_name Original filename.
+ * @param array  $settings  CSVLint settings.
+ * @return array{ok:bool,message:string}
+ */
+function sr_validate_csv_with_csvlint( $file_path, $file_name, $settings ) {
+	$url      = 'https://csvlint.io/api/validate';
+	$body     = array();
+	$delimiter = $settings['delimiter'] ?? ';';
+	$schema_url = $settings['schema_url'] ?? '';
+
+	if ( '' !== $delimiter ) {
+		$body['delimiter'] = $delimiter;
+	}
+
+	if ( '' !== $schema_url ) {
+		$body['schema'] = $schema_url;
+	}
+
+	if ( function_exists( 'curl_file_create' ) ) {
+		$body['file'] = curl_file_create( $file_path, 'text/csv', $file_name );
+	} else {
+		$body['file'] = '@' . $file_path;
+	}
+
+	$response = wp_remote_post(
+		$url,
+		array(
+			'timeout' => 15,
+			'headers' => array(
+				'Accept' => 'application/json',
+			),
+			'body'    => $body,
+		)
+	);
+
+	if ( is_wp_error( $response ) ) {
+		return array(
+			'ok'      => false,
+			'message' => 'CSVLint kunne ikke kontaktes: ' . $response->get_error_message(),
+		);
+	}
+
+	$status_code = (int) wp_remote_retrieve_response_code( $response );
+	$response_body = wp_remote_retrieve_body( $response );
+	$decoded = json_decode( $response_body, true );
+
+	if ( $status_code < 200 || $status_code >= 300 ) {
+		return array(
+			'ok'      => false,
+			'message' => 'CSVLint svarede med en fejl (' . $status_code . ').',
+		);
+	}
+
+	if ( ! is_array( $decoded ) ) {
+		return array(
+			'ok'      => false,
+			'message' => 'CSVLint-returnerede data kunne ikke læses.',
+		);
+	}
+
+	$is_valid = false;
+	if ( isset( $decoded['valid'] ) ) {
+		$is_valid = (bool) $decoded['valid'];
+	} elseif ( isset( $decoded['validation_status'] ) ) {
+		$is_valid = 'valid' === $decoded['validation_status'];
+	} elseif ( isset( $decoded['errors'] ) && empty( $decoded['errors'] ) ) {
+		$is_valid = true;
+	}
+
+	if ( $is_valid ) {
+		return array(
+			'ok'      => true,
+			'message' => 'CSVLint validering gennemført.',
+		);
+	}
+
+	$error_messages = array();
+	if ( isset( $decoded['errors'] ) && is_array( $decoded['errors'] ) ) {
+		foreach ( $decoded['errors'] as $error ) {
+			if ( is_array( $error ) && isset( $error['message'] ) ) {
+				$error_messages[] = $error['message'];
+				continue;
+			}
+			if ( is_string( $error ) ) {
+				$error_messages[] = $error;
+			}
+		}
+	}
+
+	$error_message = 'CSVLint fandt fejl i filen.';
+	if ( ! empty( $error_messages ) ) {
+		$error_message .= ' ' . implode( ' ', array_map( 'trim', $error_messages ) );
+	}
+
+	return array(
+		'ok'      => false,
+		'message' => $error_message,
+	);
 }
 
 /**
@@ -3367,6 +3495,80 @@ function sr_render_locks_page() {
 }
 
 /**
+ * Render CSVLint settings page.
+ */
+function sr_render_csv_settings_page() {
+	if ( ! current_user_can( SR_CAPABILITY_ADMIN ) ) {
+		return;
+	}
+
+	$message  = '';
+	$settings = sr_get_csvlint_settings();
+
+	if ( isset( $_POST['sr_save_csvlint_settings'] ) ) {
+		check_admin_referer( 'sr_save_csvlint_settings_action', 'sr_save_csvlint_settings_nonce' );
+		$enabled = isset( $_POST['sr_csvlint_enabled'] ) ? 1 : 0;
+		$schema_url = esc_url_raw( wp_unslash( $_POST['sr_csvlint_schema_url'] ?? '' ) );
+		$delimiter_raw = sanitize_text_field( wp_unslash( $_POST['sr_csvlint_delimiter'] ?? ';' ) );
+		$delimiter_raw = trim( $delimiter_raw );
+		if ( '' === $delimiter_raw ) {
+			$delimiter_raw = ';';
+		}
+		if ( '\\t' === $delimiter_raw ) {
+			$delimiter_raw = "\t";
+		}
+		$delimiter = substr( $delimiter_raw, 0, 1 );
+
+		update_option(
+			'sr_csvlint_settings',
+			array(
+				'enabled'    => $enabled,
+				'schema_url' => $schema_url,
+				'delimiter'  => $delimiter,
+			)
+		);
+
+		$settings = sr_get_csvlint_settings();
+		$message  = '<div class="notice notice-success"><p>CSVLint-indstillinger gemt.</p></div>';
+	}
+	?>
+	<div class="wrap">
+		<h1>CSV-indstillinger</h1>
+		<?php echo wp_kses_post( $message ); ?>
+		<form method="post">
+			<?php wp_nonce_field( 'sr_save_csvlint_settings_action', 'sr_save_csvlint_settings_nonce' ); ?>
+			<table class="form-table">
+				<tr>
+					<th scope="row">Aktivér CSVLint-validering</th>
+					<td>
+						<label>
+							<input type="checkbox" name="sr_csvlint_enabled" value="1" <?php checked( $settings['enabled'], 1 ); ?>>
+							Valider CSV-filer før import
+						</label>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row">Schema-URL (valgfri)</th>
+					<td>
+						<input type="url" name="sr_csvlint_schema_url" class="regular-text" value="<?php echo esc_attr( $settings['schema_url'] ); ?>" placeholder="https://example.com/schema.json">
+						<p class="description">Hvis udfyldt sendes schema-url til CSVLint.</p>
+					</td>
+				</tr>
+				<tr>
+					<th scope="row">Delimiter</th>
+					<td>
+						<input type="text" name="sr_csvlint_delimiter" class="regular-text" value="<?php echo esc_attr( "\t" === $settings['delimiter'] ? '\\t' : $settings['delimiter'] ); ?>" maxlength="2">
+						<p class="description">Tegn mellem kolonner (fx <code>;</code> eller <code>,</code>). Brug <code>\t</code> for tabulator.</p>
+					</td>
+				</tr>
+			</table>
+			<?php submit_button( 'Gem indstillinger', 'primary', 'sr_save_csvlint_settings' ); ?>
+		</form>
+	</div>
+	<?php
+}
+
+/**
  * Render bank statements upload page.
  */
 function sr_render_bank_statements_page() {
@@ -3382,6 +3584,8 @@ function sr_render_bank_statements_page() {
 	$current_page          = sr_get_paged_param( 'sr_page' );
 	$message               = '';
 	$popup_message         = '';
+	$csvlint_settings      = sr_get_csvlint_settings();
+	$delimiter             = $csvlint_settings['delimiter'];
 
 	if ( isset( $_POST['sr_upload_bank_csv'] ) ) {
 		check_admin_referer( 'sr_upload_bank_csv_action', 'sr_upload_bank_csv_nonce' );
@@ -3398,10 +3602,19 @@ function sr_render_bank_statements_page() {
 			$auto_created = array();
 			$auto_errors  = array();
 			$contents = file_get_contents( $file['tmp_name'] );
+			$validation_ok = true;
 
 			if ( false === $contents ) {
 				$message = '<div class="notice notice-error"><p>Kunne ikke åbne CSV-filen.</p></div>';
-			} else {
+			} elseif ( $csvlint_settings['enabled'] ) {
+				$validation = sr_validate_csv_with_csvlint( $file['tmp_name'], $file['name'], $csvlint_settings );
+				if ( ! $validation['ok'] ) {
+					$message = '<div class="notice notice-error"><p>' . esc_html( $validation['message'] ) . '</p></div>';
+					$validation_ok = false;
+				}
+			}
+
+			if ( false !== $contents && $validation_ok ) {
 				if ( false !== strpos( $contents, '\\n' ) ) {
 					$contents = str_replace( '\\n', "\n", $contents );
 				}
@@ -3419,7 +3632,7 @@ function sr_render_bank_statements_page() {
 						continue;
 					}
 
-					$row = str_getcsv( $line, ';' );
+					$row = str_getcsv( $line, $delimiter );
 
 					if ( empty( array_filter( $row, 'strlen' ) ) ) {
 						continue;
@@ -3595,6 +3808,7 @@ function sr_render_bank_statements_page() {
 			$offset
 		)
 	);
+	$delimiter_display = "\t" === $delimiter ? '\\t' : $delimiter;
 	?>
 	<div class="wrap">
 		<h1>Bankudtog</h1>
@@ -3613,7 +3827,9 @@ function sr_render_bank_statements_page() {
 					<th scope="row">CSV-fil</th>
 					<td>
 						<input type="file" name="sr_bank_csv" accept=".csv,text/csv" required>
-						<p class="description">CSV-format: Dato;Tekst;Beløb;Saldo</p>
+						<p class="description">
+							<?php echo esc_html( 'CSV-format: Dato' . $delimiter_display . 'Tekst' . $delimiter_display . 'Beløb' . $delimiter_display . 'Saldo' ); ?>
+						</p>
 					</td>
 				</tr>
 			</table>
