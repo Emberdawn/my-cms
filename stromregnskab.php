@@ -845,6 +845,10 @@ function sr_is_valid_csv_value( $value, $type, $expected_text = '' ) {
 		return $value === $expected_text;
 	}
 
+	if ( 'text_any' === $type ) {
+		return true;
+	}
+
 	return false;
 }
 
@@ -3461,7 +3465,7 @@ function sr_render_bank_statements_page() {
 	$column_count_value    = max( $default_column_count, $column_count_raw );
 	$column_configs        = array();
 	$delimiter_value       = in_array( $saved_delimiter, array( ';', ',', 'tab' ), true ) ? $saved_delimiter : $default_delimiter;
-	$allowed_types         = array( 'currency', 'date', 'text' );
+	$allowed_types         = array( 'currency', 'date', 'text', 'text_any' );
 	for ( $index = 1; $index <= $column_count_value; $index++ ) {
 		$default_config = $default_column_configs[ $index ] ?? array(
 			'name'     => 'Kolonne ' . $index,
@@ -3857,6 +3861,7 @@ function sr_render_bank_statements_page() {
 		'currency' => 'Valuta',
 		'date'     => 'Dato',
 		'text'     => 'Tekst',
+		'text_any' => 'Tekst*',
 	);
 	?>
 	<div class="wrap">
