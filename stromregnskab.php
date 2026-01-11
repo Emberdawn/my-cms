@@ -3938,7 +3938,8 @@ function sr_render_bank_statements_page() {
 								<?php if ( 'text' !== $config['type'] ) : ?>
 									&mdash;
 								<?php else : ?>
-									<input type="text" name="sr_csv_column_expected[<?php echo esc_attr( $index ); ?>]" value="<?php echo esc_attr( $config['expected'] ); ?>" required>
+									<input type="text" name="sr_csv_column_expected[<?php echo esc_attr( $index ); ?>]" value="<?php echo esc_attr( $config['expected'] ); ?>">
+									<p class="description">Tomt felt betyder, at der forventes en tom streng i CSV-filen.</p>
 								<?php endif; ?>
 							</td>
 						</tr>
